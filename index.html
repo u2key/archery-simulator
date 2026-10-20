@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>リカーブ射場シミュレータ</title>
+  <script src="https://cdn.tailwindcss.com/3.4.5"></script>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+      "vue": "https://cdn.jsdelivr.net/npm/vue@3.4.38/dist/vue.esm-browser.prod.js"
+    }
+  }
+  </script>
+  <style>
+    html, body { height: 100%; margin: 0; background: #0b1120; }
+    [v-cloak] { display: none; }
+    input[type=number] { -moz-appearance: textfield; }
+    .tabular { font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body class="text-slate-100">
+
+<script type="text/x-template" id="num-field">
+  <label class="flex items-center justify-between gap-2 py-0.5 text-[13px]" :title="hint">
+    <span class="text-slate-300 truncate">{{ label }}</span>
+    <span class="flex items-center gap-1 shrink-0">
+      <input type="number" class="w-20 rounded bg-slate-800 border border-slate-700 px-1.5 py-0.5 text-right tabular focus:outline-none focus:border-sky-500"
+             :value="modelValue" :step="step" :min="min" :max="max" @change="onInput">
+      <span class="w-10 text-[11px] text-slate-500">{{ unit }}</span>
+    </span>
+  </label>
+</script>
+
+<div id="app" v-cloak class="h-full flex flex-col">
+  <!-- 上部ツールバー -->
+  <header class="flex flex-wrap items-center gap-2 px-3 py-2 bg-slate-900 border-b border-slate-800">
+    <h1 class="font-semibold tracking-wide mr-2">リカーブ射場シミュレータ</h1>
+    <button class="px-3 py-1 rounded bg-sky-600 hover:bg-sky-500 disabled:opacity-40 text-sm font-medium"
+            :disabled="!(ui.phase === 'idle' || ui.phase === 'aiming') || roundDone" @click="onKeyRelease">
+      {{ ui.phase === 'aiming' ? '離す' : '引く' }} <kbd class="ml-1 text-[10px] opacity-70">Space</kbd>
+    </button>
+    <button class="px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-sm" :disabled="ui.phase !== 'idle' || roundDone" @click="shootEnd">1エンド自動</button>
+    <button class="px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-sm" :disabled="ui.phase !== 'idle' || roundDone" @click="simulateRest">残りを一括計算</button>
+    <button class="px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 text-sm" @click="newRound">新しいラウンド</button>
+    <div class="flex rounded overflow-hidden border border-slate-700 text-sm ml-auto">
+      <button v-for="m in [['first','1人称'],['third','3人称'],['follow','矢を追う']]" :key="m[0]"
+              class="px-2.5 py-1" :class="ui.mode === m[0] ? 'bg-sky-700' : 'bg-slate-800 hover:bg-slate-700'" @click="setMode(m[0])">{{ m[1] }}</button>
+    </div>
+    <label class="text-xs text-slate-400 flex items-center gap-1">再生
+      <select v-model.number="ui.slow" class="bg-slate-800 border border-slate-700 rounded px-1 py-0.5 text-slate-100">
+        <option :value="1">等速</option><option :value="0.25">1/4</option><option :value="0.05">1/20</option>
+      </select>
+    </label>
+    <label class="text-xs text-slate-400 flex items-center gap-1">しなり誇張
+      <select v-model.number="ui.exaggerate" class="bg-slate-800 border border-slate-700 rounded px-1 py-0.5 text-slate-100">
+        <option :value="1">×1</option><option :value="4">×4</option><option :value="10">×10</option>
+      </select>
+    </label>
+  </header>
+
+  <main class="flex-1 min-h-0 flex flex-col lg:flex-row">
+    <!-- メイン3Dビュー -->
+    <section class="relative flex-1 min-h-[320px] bg-black">
+      <div ref="view" class="absolute inset-0"></div>
+      <div v-if="ui.mode === 'first'" class="pointer-events-none absolute inset-0 flex items-center justify-center">
+        <div class="w-7 h-7 rounded-full border-2 border-emerald-400/90 shadow-[0_0_6px_rgba(0,0,0,.8)]"></div>
+        <div class="absolute w-1 h-1 rounded-full bg-emerald-300"></div>
+      </div>
+      <div class="pointer-events-none absolute left-3 bottom-3 w-72 rounded bg-slate-950/70 p-2 text-xs">
+        <div class="flex justify-between mb-1">
+          <span>{{ {idle:'待機', drawing:'引き込み中', aiming:'エイム中 — クリッカーで離す', flight:'飛翔中'}[ui.phase] }}</span>
+          <span class="tabular">エンド {{ card.ends.length }} — {{ arrowsShown }}/6 本</span>
+        </div>
+        <div class="h-1.5 rounded bg-slate-700 overflow-hidden">
+          <div class="h-full transition-[width] duration-75" :class="ui.clicked ? 'bg-emerald-400' : 'bg-amber-400'" :style="{ width: (ui.phase === 'aiming' ? ui.clicker * 100 : 0) + '%' }"></div>
+        </div>
+        <div class="mt-1 text-slate-400">クリッカー {{ ui.clicked ? '切れた — 離す!' : '' }}</div>
+      </div>
+      <div v-if="last" class="pointer-events-none absolute left-3 top-3 rounded bg-slate-950/75 px-3 py-2 text-xs tabular leading-5">
+        <div class="text-lg font-semibold">{{ last.score }} <span class="text-xs font-normal text-slate-400">E{{ last.end }}-{{ last.shot }} {{ last.note }}</span></div>
+        <div>着弾 x {{ fmt(last.dx) }} cm / y {{ fmt(last.dy) }} cm</div>
+        <div>初速 {{ fmt(last.v0) }} m/s → 着弾 {{ fmt(last.vImp) }} m/s / 飛翔 {{ fmt(last.tof, 3) }} s</div>
+        <div>発射角 仰角 {{ fmt(last.elev, 2) }}° / 方位 {{ fmt(last.azim, 2) }}° / 引き尺 {{ fmt(last.drawIn, 2) }}"</div>
+        <div class="text-slate-400">誤差の内訳 [mrad] 上下 / 左右:
+          照準 {{ fmt(last.parts.sway.elev, 2) }} / {{ fmt(last.parts.sway.azim, 2) }},
+          ボウ跳ね {{ fmt(last.parts.bowKick.elev, 2) }} / {{ fmt(last.parts.bowKick.azim, 2) }},
+          レスト {{ fmt(last.parts.rest.elev, 2) }} / {{ fmt(last.parts.rest.azim, 2) }}</div>
+      </div>
+      <div v-if="ui.message" class="absolute right-3 top-3 max-w-sm rounded bg-sky-900/80 px-3 py-1.5 text-xs" @click="ui.message = ''">{{ ui.message }}</div>
+    </section>
+
+    <!-- 右カラム: PIP / 風 / スコアシート -->
+    <aside class="w-full lg:w-[380px] shrink-0 overflow-y-auto bg-slate-900 border-l border-slate-800 p-3 space-y-3">
+      <div>
+        <div class="flex justify-between text-xs text-slate-400 mb-1">
+          <span>ターゲット拡大 ({{ setup.environment.distance }}m / {{ info?.face }}cm 的)</span>
+          <span class="flex gap-1"><span v-for="(c, i) in SHOT_COLORS" :key="i" class="inline-block w-2.5 h-2.5 rounded-full" :style="{ background: c }" :title="(i + 1) + '本目'"></span></span>
+        </div>
+        <canvas ref="pip" class="w-full aspect-square rounded"></canvas>
+      </div>
+
+      <div class="flex items-center gap-3 rounded bg-slate-800/60 p-2">
+        <svg viewBox="-50 -50 100 100" class="w-20 h-20 shrink-0">
+          <circle r="44" fill="none" stroke="#475569" stroke-width="2"/>
+          <text y="-30" text-anchor="middle" font-size="11" fill="#94a3b8">的</text>
+          <text y="40" text-anchor="middle" font-size="11" fill="#94a3b8">射手</text>
+          <g :transform="`rotate(${ui.wind.dir})`">
+            <line x1="0" y1="26" x2="0" y2="-22" stroke="#38bdf8" stroke-width="5" stroke-linecap="round"/>
+            <polygon points="0,-32 -9,-16 9,-16" fill="#38bdf8"/>
+          </g>
+        </svg>
+        <div class="text-xs leading-5 tabular">
+          <div class="text-2xl font-semibold">{{ fmt(ui.wind.speed) }} <span class="text-sm font-normal">m/s</span></div>
+          <div class="text-slate-400">射線上 高さ2m の瞬間風速</div>
+          <div class="text-slate-400">横 {{ fmt(ui.wind.x) }} / 縦 {{ fmt(ui.wind.z) }} m/s</div>
+        </div>
+      </div>
+
+      <div class="rounded bg-slate-800/60 p-2">
+        <div class="flex justify-between items-baseline mb-1">
+          <span class="text-sm font-medium">スコアシート</span>
+          <span class="text-xs text-slate-400 tabular">10: {{ sheet.tens }} / X: {{ sheet.xs }} / 平均 {{ fmt(sheet.average, 2) }}</span>
+        </div>
+        <table class="w-full text-xs tabular">
+          <thead class="text-slate-400">
+            <tr><th class="text-left font-normal">E</th><th v-for="i in ARROWS_PER_END" :key="i" class="font-normal">{{ i }}</th><th class="font-normal">小計</th><th class="font-normal">累計</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="e in ENDS" :key="e" :class="e === card.ends.length && !roundDone ? 'bg-sky-900/40' : ''">
+              <td class="text-slate-400">{{ e }}</td>
+              <td v-for="i in ARROWS_PER_END" :key="i" class="text-center"
+                  :class="{ 'text-amber-300 font-semibold': sheet.rows[e-1]?.arrows[i-1]?.value === 10, 'text-rose-400': sheet.rows[e-1]?.arrows[i-1]?.label === 'M' }">
+                {{ sheet.rows[e-1]?.arrows[i-1]?.label ?? '' }}
+              </td>
+              <td class="text-center">{{ sheet.rows[e-1]?.arrows.length ? sheet.rows[e-1].subtotal : '' }}</td>
+              <td class="text-center font-medium">{{ sheet.rows[e-1]?.arrows.length ? sheet.rows[e-1].running : '' }}</td>
+            </tr>
+          </tbody>
+          <tfoot>
+            <tr class="border-t border-slate-700"><td colspan="7" class="pt-1 text-right text-slate-400">合計 ({{ sheet.arrows }}/72 本)</td><td></td><td class="pt-1 text-center text-base font-semibold">{{ sheet.total }}</td></tr>
+          </tfoot>
+        </table>
+      </div>
+    </aside>
+  </main>
+
+  <!-- 設定パネル -->
+  <footer class="bg-slate-900 border-t border-slate-800">
+    <div class="flex items-center gap-1 px-3 pt-2 text-sm overflow-x-auto">
+      <button v-for="t in [['bow','ボウ / チューニング'],['stab','スタビライザー'],['arrow','矢'],['phys','射手 / 環境'],['sight','サイト調整']]" :key="t[0]"
+              class="px-3 py-1 rounded-t whitespace-nowrap" :class="ui.tab === t[0] && ui.settingsOpen ? 'bg-slate-800 text-sky-300' : 'text-slate-400 hover:text-slate-200'"
+              @click="ui.tab === t[0] ? (ui.settingsOpen = !ui.settingsOpen) : (ui.tab = t[0], ui.settingsOpen = true)">{{ t[1] }}</button>
+      <span class="ml-auto text-[11px] text-slate-500 whitespace-nowrap">設定を変えると次の射から反映</span>
+    </div>
+    <div v-show="ui.settingsOpen" class="bg-slate-800 px-4 py-3 max-h-[34vh] overflow-y-auto">
+
+      <div v-if="ui.tab === 'bow'" class="grid gap-x-8 gap-y-1 sm:grid-cols-2 xl:grid-cols-4">
+        <div>
+          <num-field label="リム表示ポンド" unit="lbs" v-model="setup.bow.markedLbs" :step="1" :min="10" :max="60" hint="28インチ引き時の公称ポンド"></num-field>
+          <num-field label="ブレースハイト" unit="inch" v-model="setup.bow.braceIn" :step="0.125" :min="6" :max="10"></num-field>
+          <num-field label="効率係数 η" unit="" v-model="setup.bow.eta" :step="0.01" :min="0.6" :max="0.95"></num-field>
+          <num-field label="等価運動質量 m_eff" unit="g" v-model="setup.bow.effMassG" :step="1" :min="0" :max="40"></num-field>
+        </div>
+        <div>
+          <num-field label="ティラー差 (上−下)" unit="mm" v-model="setup.bow.tillerMm" :step="0.5" hint="最適 4mm からのずれで上下のピッチングと縦ばらつき"></num-field>
+          <num-field label="ノッキング高さ" unit="mm" v-model="setup.bow.nockingMm" :step="0.5" hint="最適 10mm。ずれると発射姿勢が上下に傾く"></num-field>
+          <num-field label="クリッカー位置ずれ" unit="mm" v-model="setup.bow.clickerOffsetMm" :step="0.5" hint="自然な引き尺から外すと引き量・初速がばらつく"></num-field>
+          <label class="flex items-center justify-between py-0.5 text-[13px]"><span class="text-slate-300">レスト</span>
+            <select v-model="setup.bow.rest" class="w-[7.5rem] rounded bg-slate-800 border border-slate-700 px-1 py-0.5">
+              <option v-for="(mu, k) in restFriction" :key="k" :value="k">{{ k }} (μ={{ mu }})</option>
+            </select></label>
+        </div>
+        <div>
+          <num-field label="プランジャー突き出し" unit="mm" v-model="setup.bow.plungerOffsetMm" :step="0.25" hint="センターショットからのずれ (+で左へ向く)"></num-field>
+          <num-field label="プランジャーばね k_p" unit="N/m" v-model="setup.bow.plungerK" :step="50" :min="200" :max="3000"></num-field>
+          <num-field label="ハンドル質量" unit="g" v-model="setup.bow.riserMassG" :step="10"></num-field>
+          <num-field label="リム質量 (片側)" unit="g" v-model="setup.bow.limbMassG" :step="5"></num-field>
+          <num-field label="サイト質量" unit="g" v-model="setup.bow.sightMassG" :step="5"></num-field>
+        </div>
+        <div v-if="info" class="text-xs text-slate-400 leading-5 tabular">
+          <div class="text-slate-200 mb-1">4.1 初速モデル</div>
+          <div>引き尺 {{ fmt(info.drawIn, 2) }}" → 実効 {{ fmt(info.lbs) }} lbs</div>
+          <div>蓄積エネルギー E = ½·F·(L−BH) = {{ fmt(info.energy) }} J</div>
+          <div>初速 v₀ = {{ fmt(info.v0) }} m/s ({{ fmt(info.v0 / 0.3048, 0) }} fps)</div>
+          <div class="mt-1">ボウ総質量 {{ fmt(info.bowMass, 2) }} kg</div>
+        </div>
+      </div>
+
+      <div v-if="ui.tab === 'stab'" class="grid gap-x-8 gap-y-1 sm:grid-cols-2 xl:grid-cols-4">
+        <div>
+          <div class="text-xs text-slate-400 mb-1">センターロッド</div>
+          <num-field label="長さ" unit="inch" v-model="setup.stabilizer.center.lengthIn" :step="1" :min="0" :max="36"></num-field>
+          <num-field label="取付角 (下向き)" unit="°" v-model="setup.stabilizer.center.angleDeg" :step="1"></num-field>
+          <num-field label="先端ウェイト" unit="oz" v-model="setup.stabilizer.center.tipOz" :step="0.5" :min="0"></num-field>
+          <num-field label="スペーサー" unit="inch" v-model="setup.stabilizer.center.spacerIn" :step="0.5" :min="0"></num-field>
+          <label class="flex items-center gap-2 py-0.5 text-[13px] text-slate-300"><input type="checkbox" v-model="setup.stabilizer.center.damper"> ダンパー</label>
+        </div>
+        <div>
+          <div class="text-xs text-slate-400 mb-1">サイドロッド / Vバー</div>
+          <label class="flex items-center justify-between py-0.5 text-[13px]"><span class="text-slate-300">本数</span>
+            <select v-model.number="setup.stabilizer.side.count" class="w-20 rounded bg-slate-800 border border-slate-700 px-1 py-0.5">
+              <option :value="0">0</option><option :value="1">1</option><option :value="2">2</option>
+            </select></label>
+          <num-field label="長さ" unit="inch" v-model="setup.stabilizer.side.lengthIn" :step="1" :min="0"></num-field>
+          <num-field label="左右開き角 θh" unit="°" v-model="setup.stabilizer.side.spreadDeg" :step="1"></num-field>
+          <num-field label="上下垂れ角 θv" unit="°" v-model="setup.stabilizer.side.dropDeg" :step="1"></num-field>
+          <num-field label="先端ウェイト" unit="oz" v-model="setup.stabilizer.side.tipOz" :step="0.5" :min="0"></num-field>
+          <num-field label="スペーサー" unit="inch" v-model="setup.stabilizer.side.spacerIn" :step="0.5" :min="0"></num-field>
+          <label class="flex items-center gap-2 py-0.5 text-[13px] text-slate-300"><input type="checkbox" v-model="setup.stabilizer.side.damper"> ダンパー</label>
+        </div>
+        <div>
+          <num-field label="Vバー質量" unit="g" v-model="setup.stabilizer.vbarMassG" :step="5"></num-field>
+          <num-field label="ロッド線密度" unit="g/in" v-model="setup.stabilizer.rodGPerIn" :step="0.5"></num-field>
+        </div>
+        <div v-if="info" class="text-xs text-slate-400 leading-5 tabular">
+          <div class="text-slate-200 mb-1">4.2 慣性テンソル I [kg·m²] (グリップ原点)</div>
+          <table class="font-mono">
+            <tr v-for="r in info.I"><td v-for="c in r" class="pr-3 text-right">{{ c.toFixed(4) }}</td></tr>
+          </table>
+          <div class="mt-1">ピッチ / ヨー / ロール: {{ fmt(info.I[0][0], 3) }} / {{ fmt(info.I[1][1], 3) }} / {{ fmt(info.I[2][2], 3) }}</div>
+          <div>減衰係数 c_damp = {{ fmt(info.cDamp, 2) }} N·m·s/rad</div>
+          <div>重心 ({{ fmt(info.cg[0] * 100) }}, {{ fmt(info.cg[1] * 100) }}, {{ fmt(info.cg[2] * 100) }}) cm</div>
+        </div>
+      </div>
+
+      <div v-if="ui.tab === 'arrow'" class="grid gap-x-8 gap-y-1 sm:grid-cols-2 xl:grid-cols-4">
+        <div>
+          <num-field label="全長" unit="inch" v-model="setup.arrow.lengthIn" :step="0.25"></num-field>
+          <num-field label="全質量" unit="grain" v-model="setup.arrow.totalGrain" :step="5"></num-field>
+          <num-field label="スパイン" unit="" v-model="setup.arrow.spine" :step="50" hint="1/1000 inch 単位のたわみ。大きいほど柔らかい"></num-field>
+          <num-field label="ポイント重さ" unit="grain" v-model="setup.arrow.pointGrain" :step="5"></num-field>
+        </div>
+        <div>
+          <label class="flex items-center justify-between py-0.5 text-[13px]"><span class="text-slate-300">材質</span>
+            <select :value="setup.arrow.material" @change="setMaterial($event.target.value)" class="w-[7.5rem] rounded bg-slate-800 border border-slate-700 px-1 py-0.5">
+              <option v-for="(m, k) in materials" :key="k" :value="k">{{ m.label }}</option>
+            </select></label>
+          <num-field label="シャフト外径" unit="mm" v-model="setup.arrow.diameterMm" :step="0.1"></num-field>
+          <label class="flex items-center justify-between py-0.5 text-[13px]"><span class="text-slate-300">ベイン形状</span>
+            <select v-model="setup.arrow.vane" class="w-[7.5rem] rounded bg-slate-800 border border-slate-700 px-1 py-0.5">
+              <option v-for="(m, k) in vaneShapes" :key="k" :value="k">{{ m.label }}</option>
+            </select></label>
+          <label class="flex items-center justify-between py-0.5 text-[13px]"><span class="text-slate-300">ベイン材質</span>
+            <select v-model="setup.arrow.vaneMaterial" class="w-[7.5rem] rounded bg-slate-800 border border-slate-700 px-1 py-0.5">
+              <option v-for="(m, k) in vaneMaterials" :key="k" :value="k">{{ m.label }}</option>
+            </select></label>
+        </div>
+        <div v-if="info" class="text-xs text-slate-400 leading-5 tabular">
+          <div class="text-slate-200 mb-1">質量・空力</div>
+          <div>質量 {{ fmt(info.arrowG, 2) }} g / FOC {{ fmt(info.foc) }} %</div>
+          <div>抗力係数 C_D {{ fmt(info.cd, 2) }} (断面積基準)</div>
+          <div :class="info.stable ? '' : 'text-rose-400'">{{ info.stable ? '風見安定: 良好' : '風見安定: 不安定 (重心が後ろすぎ)' }}</div>
+          <div v-for="w in info.warnings" class="text-amber-400">{{ w }}</div>
+        </div>
+        <div v-if="info" class="text-xs text-slate-400 leading-5 tabular">
+          <div class="text-slate-200 mb-1">4.3 アーチャーズ・パラドックス</div>
+          <div>EI {{ fmt(info.EI, 2) }} N·m² / f_spine {{ fmt(info.f, 1) }} Hz</div>
+          <div>必要スパイン目安 {{ fmt(info.req, 0) }} / 動的 {{ fmt(info.dyn, 0) }}
+            <span :class="Math.abs(info.mismatch) > 0.12 ? 'text-amber-300' : 'text-emerald-300'">({{ mismatchLabel(info.mismatch) }} {{ fmt(info.mismatch * 100, 0) }}%)</span></div>
+          <div>プランジャー補正後のずれ {{ fmt(info.eff * 100, 0) }}%</div>
+          <div>初期振幅 A₀ {{ fmt(info.A0, 2) }} mm / 減衰 γ {{ info.gamma }} 1/s</div>
+        </div>
+      </div>
+
+      <div v-if="ui.tab === 'phys'" class="grid gap-x-8 gap-y-1 sm:grid-cols-2 xl:grid-cols-4">
+        <div>
+          <div class="text-xs text-slate-400 mb-1">射手</div>
+          <num-field label="身長" unit="cm" v-model="setup.player.heightCm" :step="1"></num-field>
+          <label class="flex items-center justify-between py-0.5 text-[13px]"><span class="text-slate-300">引き尺を身長から算出</span>
+            <input type="checkbox" :checked="setup.player.drawLengthIn === null"
+                   @change="setup.player.drawLengthIn = $event.target.checked ? null : Math.round(info.drawIn * 100) / 100"></label>
+          <num-field v-if="setup.player.drawLengthIn !== null" label="引き尺" unit="inch" v-model="setup.player.drawLengthIn" :step="0.25"></num-field>
+          <num-field label="安定度 (小さいほど上手い)" unit="" v-model="setup.player.skill" :step="0.1" :min="0.2" :max="4" hint="0.5=トップ, 1=中級, 2.5=初心者"></num-field>
+          <num-field label="心拍数" unit="bpm" v-model="setup.player.heartRate" :step="5"></num-field>
+        </div>
+        <div>
+          <div class="text-xs text-slate-400 mb-1">射距離</div>
+          <label class="flex items-center justify-between py-0.5 text-[13px]"><span class="text-slate-300">距離 (的サイズ)</span>
+            <select v-model.number="setup.environment.distance" class="w-[7.5rem] rounded bg-slate-800 border border-slate-700 px-1 py-0.5">
+              <option v-for="d in distances" :key="d" :value="d">{{ d }} m</option>
+            </select></label>
+          <div class="text-[11px] text-slate-500">距離を変えるとラウンドをリセットしてサイトを合わせ直します</div>
+        </div>
+        <div>
+          <div class="text-xs text-slate-400 mb-1">4.5 風・乱流</div>
+          <num-field label="平均風速 V_ref" unit="m/s" v-model="setup.environment.windSpeed" :step="0.5" :min="0"></num-field>
+          <num-field label="風向 (吹いていく向き)" unit="°" v-model="setup.environment.windDirDeg" :step="15" hint="0=追い風, 90=左→右, 180=向かい風, 270=右→左"></num-field>
+          <num-field label="乱流強度" unit="m/s" v-model="setup.environment.turbulence" :step="0.1" :min="0"></num-field>
+          <num-field label="基準高さ h_ref" unit="m" v-model="setup.environment.refHeight" :step="0.5"></num-field>
+        </div>
+        <div>
+          <num-field label="べき指数 p" unit="" v-model="setup.environment.shearExp" :step="0.01"></num-field>
+          <num-field label="乱流の空間スケール" unit="m" v-model="setup.environment.lengthScale" :step="5"></num-field>
+          <num-field label="乱流の時間スケール" unit="s" v-model="setup.environment.timeScale" :step="0.5"></num-field>
+          <num-field label="乱数シード" unit="" v-model="setup.environment.seed" :step="1"></num-field>
+        </div>
+      </div>
+
+      <div v-if="ui.tab === 'sight'" class="grid gap-x-8 gap-y-2 sm:grid-cols-2 xl:grid-cols-3">
+        <div>
+          <num-field label="目〜ピン距離" unit="m" v-model="setup.sight.radiusM" :step="0.01"></num-field>
+          <div class="flex items-center gap-3 mt-2">
+            <div class="grid grid-cols-3 gap-1 text-sm">
+              <span></span><button class="px-2 py-1 rounded bg-slate-700 hover:bg-slate-600" @click="nudge('yMm', 0.5)">▲</button><span></span>
+              <button class="px-2 py-1 rounded bg-slate-700 hover:bg-slate-600" @click="nudge('xMm', -0.5)">◀</button>
+              <span class="text-center text-[10px] text-slate-400 self-center">0.5mm</span>
+              <button class="px-2 py-1 rounded bg-slate-700 hover:bg-slate-600" @click="nudge('xMm', 0.5)">▶</button>
+              <span></span><button class="px-2 py-1 rounded bg-slate-700 hover:bg-slate-600" @click="nudge('yMm', -0.5)">▼</button><span></span>
+            </div>
+            <div class="text-sm tabular leading-6">
+              <div>上下 <span class="font-semibold">{{ fmt(setup.sight.yMm) }}</span> mm</div>
+              <div>左右 <span class="font-semibold">{{ fmt(setup.sight.xMm) }}</span> mm</div>
+            </div>
+          </div>
+        </div>
+        <div class="space-y-2 text-sm">
+          <button class="w-full px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600" @click="doAutoSight">自動サイト合わせ (無風・理想射)</button>
+          <button class="w-full px-3 py-1.5 rounded bg-sky-700 hover:bg-sky-600 disabled:opacity-40" :disabled="!suggestion" @click="applySuggestion">グループ中心に合わせて補正</button>
+          <div v-if="suggestion" class="text-xs text-slate-300 tabular">
+            直近 {{ suggestion.n }} 本の中心: 右 {{ fmt(suggestion.dx * 100) }} cm / 上 {{ fmt(suggestion.dy * 100) }} cm<br>
+            → ピンを {{ suggestion.xMm >= 0 ? '右' : '左' }} {{ fmt(Math.abs(suggestion.xMm)) }} mm、{{ suggestion.yMm >= 0 ? '上' : '下' }} {{ fmt(Math.abs(suggestion.yMm)) }} mm
+          </div>
+          <div v-else class="text-xs text-slate-500">3本以上射つと補正案を表示します</div>
+          <label class="flex items-center gap-2 text-xs text-slate-300"><input type="checkbox" v-model="ui.autoCorrect"> 自動射撃・一括計算ではエンドごとに自動補正</label>
+        </div>
+        <div class="text-xs text-slate-400 leading-5">
+          <div class="text-slate-200 mb-1">「当たった方向に合わせる」</div>
+          <div>上に当たったらピンを上へ → 照準を保つためにボウが下がり、着弾が下がる。</div>
+          <div>右に当たったらピンを右へ → ボウが左へ向き、着弾が左へ戻る。</div>
+          <div class="mt-1">補正量 = ずれ × (目〜ピン距離 / 射距離)</div>
+        </div>
+      </div>
+    </div>
+  </footer>
+</div>
+
+<script type="module" src="./src/ui/app.js"></script>
+</body>
+</html>
