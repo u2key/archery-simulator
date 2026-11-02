@@ -23,14 +23,17 @@ export function scoreArrow(rM, faceCm, arrowRadiusM = 0) {
   return { value: v, label: String(v), x: false };
 }
 
-export function createScoreCard() {
-  return { ends: [[]] };
+/** maxEnds: エンド数 (プラクティスは 12 エンド 72 本。試合は選んだ射数 / 6) */
+export function createScoreCard(maxEnds = ENDS) {
+  return { ends: [[]], maxEnds };
 }
+
+const maxEndsOf = (card) => card.maxEnds ?? ENDS;
 
 export function addArrow(card, score) {
   let cur = card.ends[card.ends.length - 1];
   if (cur.length >= ARROWS_PER_END) {
-    if (card.ends.length >= ENDS) return false;
+    if (card.ends.length >= maxEndsOf(card)) return false;
     cur = [];
     card.ends.push(cur);
   }
@@ -39,7 +42,16 @@ export function addArrow(card, score) {
 }
 
 export function isComplete(card) {
-  return card.ends.length === ENDS && card.ends[ENDS - 1].length === ARROWS_PER_END;
+  const n = maxEndsOf(card);
+  return card.ends.length === n && card.ends[n - 1].length === ARROWS_PER_END;
+}
+
+/**
+ * 順位付けの比較 (WA): 合計点 → 10点の数 (X 含む) → X の数。負なら a が上位。
+ * a, b は { total, tens, xs }
+ */
+export function compareStanding(a, b) {
+  return b.total - a.total || b.tens - a.tens || b.xs - a.xs;
 }
 
 export function endSubtotal(end) {
