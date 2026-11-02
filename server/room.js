@@ -5,13 +5,14 @@
 // 得点の計算は各クライアントの物理シミュレーションが行い、サーバーは記録・進行・順位付けだけを担う。
 import { TARGET_FACES, defaultSetup } from '../src/physics/config.js';
 import { ARROWS_PER_END, compareStanding } from '../src/physics/scoring.js';
+import { WeatherTimeline } from '../src/physics/weather.js';
 
 export const MIN_PLAYERS = 2;
 export const MAX_ARROWS = 72;
 export const ARROW_CHOICES = Array.from({ length: MAX_ARROWS / ARROWS_PER_END }, (_, i) => (i + 1) * ARROWS_PER_END);
 const NAME_MAX = 20;
 
-// 試合中は全員が同じ距離・同じ風 (乱流のシードも共通) で射つ。値はここで範囲に収める。
+// 試合中は全員が同じ距離・同じ風 (乱流のシードも共通)・同じ天候で射つ。値はここで範囲に収める。
 const ENV_LIMITS = {
   windSpeed: [0, 15], windDirDeg: [-360, 720], turbulence: [0, 5], refHeight: [0.5, 20],
   shearExp: [0, 1], lengthScale: [1, 500], timeScale: [0.1, 60], seed: [-1e9, 1e9],
@@ -28,6 +29,7 @@ function cleanEnvironment(env = {}, distance) {
     const v = Number(env[k]);
     if (Number.isFinite(v)) out[k] = Math.min(hi, Math.max(lo, v));
   }
+  out.weather = env.weather === 'clear' ? 'clear' : 'random';
   return out;
 }
 
@@ -81,7 +83,7 @@ export class Room {
   }
 
   /** 試合開始。接続中の全員が出場する。距離・風は開始した人の設定を全員に適用する */
-  start(byId, { arrows, distance, environment } = {}) {
+  start(byId, { arrows, distance, environment } = {}, nowMs = Date.now()) {
     if (!this.players.get(byId)?.connected) return { ok: false, error: '接続していません' };
     if (this.match?.status === 'running') return { ok: false, error: '試合はすでに進行中です' };
     if (this.connectedPlayers().length < MIN_PLAYERS) return { ok: false, error: `${MIN_PLAYERS}人以上の接続が必要です` };
@@ -92,6 +94,7 @@ export class Room {
     // 前の試合で切断したまま戻らなかった選手は名簿から外す
     for (const p of [...this.players.values()]) if (!p.connected) this.players.delete(p.id);
     const participants = this.connectedPlayers().map((p) => p.id);
+    const env = cleanEnvironment(environment, distance);
     this.match = {
       id: `m${++this.matchSeq}-${Date.now().toString(36)}`,
       status: 'running',
@@ -99,7 +102,11 @@ export class Room {
       ends: arrows / ARROWS_PER_END,
       currentEnd: 1,
       distance,
-      environment: cleanEnvironment(environment, distance),
+      environment: env,
+      // 天候は試合ごとに新しいシードで決める (同じ設定でも毎回違う空模様になる)
+      weather: new WeatherTimeline((nowMs ^ (env.seed * 2654435761)) >>> 0, env.weather, nowMs),
+      sheltered: new Set(),    // 雷で避難中の選手
+      eliminated: new Set(),   // 避難が遅れて失格になった選手
       startedBy: byId,
       startedAt: Date.now(),
       participants,
@@ -113,6 +120,7 @@ export class Room {
     const m = this.match;
     if (!m || m.status !== 'running' || a.matchId !== m.id) return { ok: false, error: '進行中の試合がありません' };
     if (!m.participants.includes(id)) return { ok: false, error: 'この試合の出場者ではありません' };
+    if (m.eliminated.has(id)) return { ok: false, error: '失格のため記録できません' };
     // n = その選手の通算何本目か (0 始まり)。再接続時の再送で同じ矢が二重に記録されないようにする
     const count = m.scores[id].flat().length;
     if (a.n !== count) return { ok: false, silent: true, error: '記録済みの矢です' };
@@ -128,29 +136,78 @@ export class Room {
     return { ok: true };
   }
 
-  /** 接続中の出場者が全員現在のエンドを射ち終えたら次のエンドへ。切断中の選手の残りは M とする */
+  /** 避難 (雷雲の接近中・到来後のみ)。避難中は射てないが、雷雲が通過すれば射座に戻る */
+  evacuate(id, nowMs = Date.now()) {
+    const m = this.match;
+    if (!m || m.status !== 'running' || !m.participants.includes(id)) return { ok: false, error: '進行中の試合がありません' };
+    if (m.eliminated.has(id)) return { ok: false, error: 'すでに失格です' };
+    if (!m.weather.phase(nowMs)) return { ok: false, error: '雷雲は来ていません' };
+    m.sheltered.add(id);
+    return { ok: true };
+  }
+
+  /**
+   * 時間を進める (サーバーが定期的に呼ぶ)。天候の遷移、避難期限を過ぎても射座に残った選手の失格、
+   * 雷雲の通過による再開を処理する。状態が変わったら true
+   */
+  tick(nowMs = Date.now()) {
+    const m = this.match;
+    if (!m || m.status !== 'running') return false;
+    const w = m.weather;
+    const storm = w.storm;
+    let changed = false;
+    if (storm && !storm.resolved && nowMs >= storm.deadline) {
+      storm.resolved = true;
+      // 切断中の選手は射場にいないので失格にしない
+      for (const pid of m.participants) {
+        if (this.players.get(pid)?.connected && !m.sheltered.has(pid)) m.eliminated.add(pid);
+      }
+      changed = true;
+    }
+    const wasStorm = !!w.storm;
+    if (w.tick(nowMs)) changed = true;
+    if (wasStorm && !w.storm) m.sheltered.clear();   // 雷雲が通過 → 全員射座に戻る
+    if (changed) {
+      if (!m.participants.some((pid) => !m.eliminated.has(pid))) this.finish(nowMs);
+      else this.advance();
+    }
+    return changed;
+  }
+
+  finish(nowMs = Date.now()) {
+    const m = this.match;
+    m.status = 'finished';
+    m.finishedAt = nowMs;
+    // 試合が終わったら、切断したままの選手は名簿から外す (結果には残る)
+    for (const pid of m.participants) if (!this.players.get(pid)?.connected) this.players.delete(pid);
+  }
+
+  /** 接続中で失格でない出場者が全員現在のエンドを射ち終えたら次のエンドへ。切断中の選手の残りは M とする */
   advance() {
     const m = this.match;
     if (!m || m.status !== 'running') return;
     const idx = m.currentEnd - 1;
-    const active = m.participants.filter((pid) => this.players.get(pid)?.connected);
+    const active = m.participants.filter((pid) => this.players.get(pid)?.connected && !m.eliminated.has(pid));
+    if (active.length === 0) {
+      // 射てる選手が残っていない (失格した選手が観戦しているだけ) なら、そこで試合終了
+      this.finish();
+      return;
+    }
     if (!active.every((pid) => m.scores[pid][idx].length >= ARROWS_PER_END)) return;
     for (const pid of m.participants) {
+      if (m.eliminated.has(pid)) continue;   // 失格した選手の記録はそこで止まる
       const end = m.scores[pid][idx];
       while (end.length < ARROWS_PER_END) end.push({ ...MISS });
     }
     if (m.currentEnd >= m.ends) {
-      m.status = 'finished';
-      m.finishedAt = Date.now();
-      // 試合が終わったら、切断したままの選手は名簿から外す (結果には残る)
-      for (const pid of m.participants) if (!this.players.get(pid)?.connected) this.players.delete(pid);
+      this.finish();
       return;
     }
     m.currentEnd++;
     for (const pid of m.participants) m.scores[pid].push([]);
   }
 
-  /** 順位表。同点 (合計・10・X がすべて同じ) は同順位 */
+  /** 順位表。同点 (合計・10・X がすべて同じ) は同順位。失格者は最後に並び、順位なし */
   standings() {
     const m = this.match;
     if (!m) return [];
@@ -167,17 +224,20 @@ export class Room {
         arrows: all.length,
         endTotals: ends.map((e) => e.reduce((s, a) => s + a.value, 0)),
         currentEndArrows: ends[m.currentEnd - 1]?.length ?? 0,
+        eliminated: m.eliminated.has(pid),
+        sheltered: m.sheltered.has(pid),
       };
     });
-    rows.sort(compareStanding);
+    rows.sort((a, b) => Number(a.eliminated) - Number(b.eliminated) || compareStanding(a, b));
     rows.forEach((r, i) => {
-      r.rank = i > 0 && compareStanding(rows[i - 1], r) === 0 ? rows[i - 1].rank : i + 1;
+      if (r.eliminated) r.rank = null;
+      else r.rank = i > 0 && compareStanding(rows[i - 1], r) === 0 ? rows[i - 1].rank : i + 1;
     });
     return rows;
   }
 
   /** クライアントへ送る状態。自分の記録 (全矢) だけは詳しく返す (再接続時にスコアシートを復元するため) */
-  snapshot(forId) {
+  snapshot(forId, nowMs = Date.now()) {
     const m = this.match;
     if (m) {
       // 退出した選手の名前も結果に残す
@@ -190,6 +250,7 @@ export class Room {
     return {
       room: this.name,
       you: forId,
+      serverNow: nowMs,
       minPlayers: MIN_PLAYERS,
       arrowChoices: ARROW_CHOICES,
       canStart: this.canStart(),
@@ -199,6 +260,8 @@ export class Room {
         distance: m.distance, environment: m.environment, participants: m.participants,
         startedBy: m.startedBy, standings: this.standings(),
         mine: m.scores[forId] ?? null,
+        weather: m.weather.snapshot(nowMs),
+        sheltered: [...m.sheltered], eliminated: [...m.eliminated],
       },
     };
   }

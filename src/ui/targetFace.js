@@ -54,8 +54,9 @@ export function faceCanvas(size = 1024) {
  * @param {{x:number,y:number}|null} aim 照準点 (m, 的中心基準)
  * @param {number} arrowDiameterM
  * @param {object|null} sight  サイトの映り込み (drawSightPicture の引数)。null なら照準点の丸だけ描く
+ * @param {number} haze  雨による視界の悪さ (0=晴れ, 1=ほぼ見えない)。的がかすみ、雨筋が入る
  */
-export function drawPip(canvas, faceCm, impacts, currentEnd, aim, arrowDiameterM, sight = null) {
+export function drawPip(canvas, faceCm, impacts, currentEnd, aim, arrowDiameterM, sight = null, haze = 0) {
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth, h = canvas.clientHeight;
@@ -70,6 +71,19 @@ export function drawPip(canvas, faceCm, impacts, currentEnd, aim, arrowDiameterM
   const R = Math.min(w, h) / 2 - 8;
   const cx = w / 2, cy = h / 2;
   drawFace(ctx, cx, cy, R);
+  if (haze > 0.01) {
+    ctx.fillStyle = `rgba(150,160,172,${0.6 * haze})`;
+    ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = `rgba(225,232,240,${0.45 * haze})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i < 70 * haze; i++) {
+      const x = Math.random() * w, y = Math.random() * h;
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - 3, y + 14);
+    }
+    ctx.stroke();
+  }
   const pxPerM = R / (faceCm / 200);
   const toPx = (p) => [cx + p.dx * pxPerM, cy - p.dy * pxPerM];
   const dotR = Math.max(3.2, (arrowDiameterM / 2) * pxPerM);

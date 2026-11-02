@@ -80,6 +80,7 @@ export function defaultSetup() {
       lengthScale: 25,
       timeScale: 4,
       seed: 7,
+      weather: 'random',   // random: 晴れ・くもり・雨・雷雨が移り変わる / clear: 晴れ固定
     },
     sight: {
       radiusM: 0.85,       // 目からサイトピンまでの距離

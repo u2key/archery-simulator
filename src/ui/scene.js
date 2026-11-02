@@ -5,8 +5,17 @@ import { faceCanvas, SHOT_COLORS } from './targetFace.js';
 import { paradoxDeflection } from '../physics/arrow.js';
 import { TARGET_CENTER_HEIGHT } from '../physics/scoring.js';
 import { INCH } from '../physics/units.js';
+import { WEATHER } from '../physics/weather.js';
 
 const PARTICLES = 1400;
+const RAIN_DROPS = 2600;
+// 天候ごとの空の色と霧 (近・遠 [m])。雨では 70m 先の的がかすむ
+const SKY = {
+  clear: { color: '#9cc3e6', fog: [60, 220] },
+  cloudy: { color: '#a7b2bd', fog: [45, 170] },
+  rain: { color: '#7c8691', fog: [12, 105] },
+  storm: { color: '#4b525d', fog: [6, 68] },
+};
 const GRIP_BELOW_ARROW = 0.03;   // 矢はグリップのピボットより少し上を通る
 const SHOULDER_PROTRACT_MAX = 0.12;   // 弦に手が届かないとき、引き手の肩 (肩甲骨) を前へ出せる量 [m]
 
@@ -117,8 +126,10 @@ export class RangeScene {
     this.mode = 'third';
     this.fovFirst = 10;
 
-    this.scene.add(new THREE.HemisphereLight('#ffffff', '#4a6b2a', 1.4));
+    this.hemi = new THREE.HemisphereLight('#ffffff', '#4a6b2a', 1.4);
+    this.scene.add(this.hemi);
     const sun = new THREE.DirectionalLight('#fff6e0', 2.2);
+    this.sun = sun;
     sun.position.set(-20, 40, -10);
     // 射手まわりだけ影を落とす (足元の接地感を出す)
     sun.castShadow = true;
@@ -139,6 +150,12 @@ export class RangeScene {
     this.archerGroup = new THREE.Group();
     this.world.add(this.targetGroup, this.stuckGroup, this.bowGroup, this.archerGroup);
     this.buildParticles();
+    this.buildRain();
+    // 天候の見た目 (目標値へ毎フレーム近づける)
+    this.weatherKind = 'clear';
+    this.wx = { sky: new THREE.Color(SKY.clear.color), near: 60, far: 220, light: 1, rain: 0 };
+    this.flash = 0;
+    this.bolt = null;
     this.flying = null;
 
     new ResizeObserver(() => this.resize()).observe(container);
@@ -610,7 +627,110 @@ export class RangeScene {
     return this.flying ? this.flying.mesh.getWorldPosition(new THREE.Vector3()) : null;
   }
 
+  buildRain() {
+    // 雨粒: カメラのまわりの箱の中を落ちる線分。箱はカメラについて動くので、どの視点でも降って見える
+    this.rainOff = new Float32Array(RAIN_DROPS * 3);
+    for (let i = 0; i < RAIN_DROPS; i++) {
+      this.rainOff[i * 3] = (Math.random() * 2 - 1) * 8;
+      this.rainOff[i * 3 + 1] = Math.random() * 9;
+      this.rainOff[i * 3 + 2] = (Math.random() * 2 - 1) * 14;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(RAIN_DROPS * 6), 3));
+    this.rain = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: '#c9d6e3', transparent: true, opacity: 0, depthWrite: false }));
+    this.rain.frustumCulled = false;
+    this.rain.visible = false;
+    this.world.add(this.rain);
+  }
+
+  /** 天候の切り替え (WEATHER のキー)。見た目は数秒かけて移り変わる */
+  setWeather(kind) {
+    this.weatherKind = WEATHER[kind] ? kind : 'clear';
+  }
+
+  /** 稲妻。near=true なら閃光と稲妻の線、false なら遠くがぼんやり光るだけ */
+  lightning(near) {
+    this.flash = Math.max(this.flash, near ? 1 : 0.35);
+    if (!near) return;
+    if (this.bolt) this.world.remove(this.bolt);
+    const pts = [];
+    let x = (Math.random() * 2 - 1) * 70, z = (this.distance ?? 70) * (0.8 + Math.random() * 1.6), y = 70;
+    pts.push(new THREE.Vector3(x, y, z));
+    while (y > 0) {
+      y -= 4 + Math.random() * 7;
+      x += (Math.random() * 2 - 1) * 5;
+      z += (Math.random() * 2 - 1) * 3;
+      pts.push(new THREE.Vector3(x, Math.max(0, y), z));
+    }
+    this.bolt = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: '#f4f2ff', transparent: true, fog: false }));
+    this.world.add(this.bolt);
+  }
+
+  /** 避難中・失格の射手は射座からいなくなる */
+  setArcherPresent(present) {
+    this.archerPresent = present;
+    this.applyVisibility();
+  }
+
+  applyVisibility() {
+    const show = this.mode !== 'first' && this.archerPresent !== false;
+    this.bowGroup.visible = show;
+    this.archerGroup.visible = show;
+  }
+
+  updateWeather(windField, simTime, dt) {
+    const look = WEATHER[this.weatherKind];
+    const sky = SKY[this.weatherKind];
+    const k = 1 - Math.exp(-dt / 1.5);   // 約 1.5 秒で移り変わる
+    const wx = this.wx;
+    wx.sky.lerp(new THREE.Color(sky.color), k);
+    wx.near += (sky.fog[0] - wx.near) * k;
+    wx.far += (sky.fog[1] - wx.far) * k;
+    wx.light += (look.light - wx.light) * k;
+    wx.rain += (look.rain - wx.rain) * k;
+    this.flash *= Math.exp(-dt * 7);
+
+    const bg = wx.sky.clone().lerp(new THREE.Color('#e8ecff'), Math.min(1, this.flash * 0.7));
+    this.scene.background.copy(bg);
+    this.scene.fog.color.copy(bg);
+    this.scene.fog.near = wx.near;
+    this.scene.fog.far = wx.far + this.flash * 40;
+    this.hemi.intensity = 1.4 * (0.45 + 0.55 * wx.light) + this.flash * 2.5;
+    this.sun.intensity = 2.2 * wx.light * wx.light;
+    if (this.bolt) {
+      this.bolt.material.opacity = Math.min(1, this.flash * 1.6);
+      if (this.flash < 0.05) {
+        this.world.remove(this.bolt);
+        this.bolt = null;
+      }
+    }
+
+    // 雨粒: 毎秒 8m で落ち、風に流される
+    this.rain.visible = wx.rain > 0.02;
+    if (!this.rain.visible) return;
+    this.rain.material.opacity = Math.min(0.55, 0.38 * wx.rain);
+    const cam = this.camera.position;
+    const cx = -cam.x, cz = cam.z;   // カメラの位置を物理座標へ (x 反転)
+    const w = windField.at(cx, 2, cz, simTime);
+    const vx = w[0], vy = -8, vz = w[2];
+    const len = 0.045;   // 線分の長さ = 速度 × len [s]
+    const pos = this.rain.geometry.attributes.position.array;
+    const o = this.rainOff;
+    for (let i = 0; i < RAIN_DROPS; i++) {
+      let x = o[i * 3] + vx * dt, y = o[i * 3 + 1] + vy * dt, z = o[i * 3 + 2] + vz * dt;
+      if (y < 0) { y += 9; x = (Math.random() * 2 - 1) * 8; z = (Math.random() * 2 - 1) * 14; }
+      if (x > 8) x -= 16; else if (x < -8) x += 16;
+      if (z > 14) z -= 28; else if (z < -14) z += 28;
+      o[i * 3] = x; o[i * 3 + 1] = y; o[i * 3 + 2] = z;
+      const j = i * 6;
+      pos[j] = cx + x; pos[j + 1] = y; pos[j + 2] = cz + z;
+      pos[j + 3] = cx + x - vx * len; pos[j + 4] = y - vy * len; pos[j + 5] = cz + z - vz * len;
+    }
+    this.rain.geometry.attributes.position.needsUpdate = true;
+  }
+
   updateWind(windField, simTime, dt) {
+    this.updateWeather(windField, simTime, dt);
     const b = this.bounds;
     for (let i = 0; i < PARTICLES; i++) {
       const x = this.pPos[i * 3], y = this.pPos[i * 3 + 1], z = this.pPos[i * 3 + 2];
@@ -643,8 +763,7 @@ export class RangeScene {
     this.mode = mode;
     this.controls.enabled = mode === 'third';
     // 1人称では目の直前にある弦・ハンドル・自分の体が視界を塞ぐので描画しない (照準はピンのオーバーレイで示す)
-    this.bowGroup.visible = mode !== 'first';
-    this.archerGroup.visible = mode !== 'first';
+    this.applyVisibility();
     if (mode === 'third') {
       this.camera.fov = 45;
       this.camera.position.set(-2.4, 1.9, -2.6);

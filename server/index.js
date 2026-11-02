@@ -79,6 +79,11 @@ wss.on('connection', (ws, req) => {
       reply(entry.room.start(playerId, msg));
     } else if (msg.type === 'arrow') {
       reply(entry.room.recordArrow(playerId, msg));
+    } else if (msg.type === 'evacuate') {
+      reply(entry.room.evacuate(playerId));
+    } else if (msg.type === 'debugStorm' && process.env.ARCHERY_DEBUG) {
+      // 動作確認用: 試合中の天候をすぐ雷雨にする (ARCHERY_DEBUG=1 で起動したときだけ)
+      entry.room.match?.weather.startStorm(Date.now());
     } else {
       return;
     }
@@ -93,6 +98,12 @@ wss.on('connection', (ws, req) => {
     if (entry.sockets.size === 0) rooms.delete(roomName);
   });
 });
+
+// 天候の進行・避難期限の判定 (0.5 秒ごと)。変化があったルームだけ全員に送る
+setInterval(() => {
+  const now = Date.now();
+  for (const entry of rooms.values()) if (entry.room.tick(now)) broadcast(entry);
+}, 500).unref();
 
 // 応答のない接続 (スリープ・回線断) を 30 秒ごとに検出して切る
 setInterval(() => {

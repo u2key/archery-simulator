@@ -323,3 +323,20 @@ test('3.3 リム付け根のスタビとリムダンパー: 慣性モーメン�
   const parts = bowMassModel(s.bow, s.stabilizer).parts;
   assert.ok(parts.some((p) => p.name === 'limbTop') && !parts.some((p) => p.name === 'limbBottom'));
 });
+
+test('雨: 発射方向に雨のばらつきが加わる (雨なしの結果は変わらない)', () => {
+  const s = defaultSetup();
+  const prep = prepare(s);
+  const rng = createRng(99);
+  let sq = 0;
+  const n = 400;
+  for (let i = 0; i < n; i++) {
+    const r = shoot(s, prep, { rng, sway: { elev: 0, azim: 0 }, rain: 1.4 });
+    sq += r.parts.rain.elev ** 2 + r.parts.rain.azim ** 2;
+  }
+  // 各軸の標準偏差 0.7 mrad × 強さ 1.4
+  close(Math.sqrt(sq / (2 * n)) * 1000, 0.7 * 1.4, 0.1, 'rain sigma [mrad]');
+  const a = shoot(s, prep, { rng: createRng(5) }), b = shoot(s, prep, { rng: createRng(5), rain: 0 });
+  assert.equal(a.dx, b.dx);
+  assert.equal(b.parts.rain, undefined);
+});

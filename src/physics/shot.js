@@ -20,6 +20,7 @@ const RELEASE_TORQUE_SIGMA = 3.0;  // リリース時の手のトルクのばら
 const BOW_TO_ARROW = 0.6;        // 矢が離れる瞬間のボウの傾きのうち矢の向きに伝わる割合
 const SPINE_YAW_MRAD = 4;        // スパイン不一致 100% あたりの左右偏差
 const NOCK_OPT_MM = 10, TILLER_OPT_MM = 4;
+const RAIN_MRAD = 0.7;           // 雨 (強さ 1) による発射方向のばらつき (各軸の標準偏差)
 const NOISE_STD = 0.28 * Math.hypot(1, 0.5);
 // 射手はシューティングラインをまたいで立つ。体の中心 (=ライン) はアンカー位置よりこれだけ後ろ [m]
 export const STANCE_BEHIND_ANCHOR = 0.16;
@@ -77,6 +78,7 @@ const dirFromAngles = (elev, azim) => [Math.sin(azim) * Math.cos(elev), Math.sin
  * @param {boolean} [o.bowMotion=false] フォロースルーの姿勢列を返すか
  * @param {object}  [o.sway]        照準の揺れを外から与える (UI で表示していた揺れをそのまま使う)
  * @param {number}  [o.drawDeltaIn=0] クリッカー前リリースなどによる引き尺の増減 [inch]
+ * @param {number}  [o.rain=0]   雨の強さ (0=なし, 1=雨, 1.4=雷雨)。濡れた手・グリップと雨粒で発射方向がばらつく
  */
 export function shoot(setup, prep, o = {}) {
   const noise = o.noise ?? true;
@@ -120,6 +122,8 @@ export function shoot(setup, prep, o = {}) {
     },
     rest: { elev: N(1.2 * mu * MRAD), azim: N(2.5 * mu * MRAD) },
   };
+  const rain = o.rain ?? 0;
+  if (rain > 0) parts.rain = { elev: N(RAIN_MRAD * MRAD * rain), azim: N(RAIN_MRAD * MRAD * rain) };
   let elev = aim.elev, azim = aim.azim;
   for (const k of Object.keys(parts)) {
     elev += parts[k].elev;

@@ -10,11 +10,59 @@ import { createScoreCard, addArrow, summary, isComplete, ENDS, ARROWS_PER_END } 
 import { applyCorrection, correctionMm, groupCenter } from '../physics/sight.js';
 import { toDeg } from '../physics/units.js';
 import { connectMatchServer } from './net.js';
+import { WEATHER, WeatherTimeline, phaseAt } from '../physics/weather.js';
 
 const DRAW_TIME = 0.9;
 // サイトの映り込み: ハウジング内径とピン先の実寸 [m]
 const SIGHT_RING_M = 0.011;
 const SIGHT_PIN_M = 0.0012;
+
+// ---- 効果音 (WebAudio)。音が出せない環境では何もしない ----
+function noiseBurst(ctx, seconds) {
+  const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * seconds), ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  return src;
+}
+
+/** 雷鳴。near なら大きく鋭く、遠ければ小さく低い */
+function thunderSound(near) {
+  try {
+    audioCtx ??= new AudioContext();
+    const t = audioCtx.currentTime + (near ? 0.15 + Math.random() * 0.6 : 0.8 + Math.random() * 1.5);
+    const src = noiseBurst(audioCtx, 3.5);
+    const lp = audioCtx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = near ? 420 : 160;
+    const g = audioCtx.createGain();
+    const peak = near ? 0.9 : 0.25;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + (near ? 0.04 : 0.5));
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 3.2);
+    src.connect(lp).connect(g).connect(audioCtx.destination);
+    src.start(t);
+    src.stop(t + 3.5);
+  } catch { /* 音が出せない環境では無視 */ }
+}
+
+/** 避難のサイレン (2 音を交互に) */
+function sirenSound() {
+  try {
+    audioCtx ??= new AudioContext();
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    const t = audioCtx.currentTime;
+    o.type = 'sawtooth';
+    for (let i = 0; i < 6; i++) o.frequency.setValueAtTime(i % 2 ? 660 : 880, t + i * 0.45);
+    g.gain.setValueAtTime(0.12, t);
+    g.gain.setValueAtTime(0.12, t + 2.6);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 2.8);
+    o.connect(g).connect(audioCtx.destination);
+    o.start(t);
+    o.stop(t + 2.8);
+  } catch { /* 音が出せない環境では無視 */ }
+}
 
 function loadShowSight() {
   try { return localStorage.getItem('archery.showSight') !== '0'; } catch { return true; }
@@ -63,6 +111,9 @@ const App = {
       mode: 'third', phase: 'idle', autoEnd: false, slow: 1, exaggerate: 1, tab: 'bow',
       clicker: 0, clicked: false, wind: { speed: 0, dir: 0 }, message: '', settingsOpen: true, autoCorrect: true,
       showSight: loadShowSight(),
+      // 天候: 表示用。phase は null | 'approach' (遠雷) | 'storm' (雷雲到来・射撃中止)
+      weather: { kind: 'clear', look: 'clear', label: '晴れ', icon: '☀', rain: 0, visibility: 1, phase: null, countdown: 0, endIn: 0 },
+      practiceSheltered: false,
     });
     const card = ref(createScoreCard());
     const impacts = ref([]);
@@ -96,7 +147,10 @@ const App = {
     // 自分は今のエンドを射ち終えて、他の選手を待っている
     const waitingOthers = computed(() => inMatch.value && sheet.value.arrows >= match.value.currentEnd * ARROWS_PER_END);
     const roundDone = computed(() => isComplete(card.value) || (matchView.value && match.value.status !== 'running'));
-    const shootBlocked = computed(() => roundDone.value || waitingOthers.value);
+    // 雷: 試合ではサーバーの記録、プラクティスでは自分の状態
+    const sheltered = computed(() => (inMatch.value ? !!match.value.sheltered?.includes(myId.value) : ui.practiceSheltered));
+    const eliminated = computed(() => matchView.value && !!match.value.eliminated?.includes(myId.value));
+    const shootBlocked = computed(() => roundDone.value || waitingOthers.value || ui.weather.phase === 'storm' || sheltered.value || eliminated.value);
     const arrowsShown = computed(() => card.value.ends[card.value.ends.length - 1].length);
 
     let messageTimer = null;
@@ -136,13 +190,101 @@ const App = {
       }
     }
 
+    // 雨は乱流を強め、雷雨は平均風も強める (試合では全員が同じ天候なので同じ風になる)
     function rebuildWind() {
       const e = toRaw(setup).environment;
+      const look = ui.weather.look;
+      const rain = WEATHER[look].rain;
       wind = createWindField({
-        speed: e.windSpeed, directionDeg: e.windDirDeg, refHeight: e.refHeight, shearExp: e.shearExp,
-        turbulence: e.turbulence, lengthScale: e.lengthScale, timeScale: e.timeScale, seed: e.seed,
+        speed: e.windSpeed + (look === 'storm' ? 2 : 0), directionDeg: e.windDirDeg, refHeight: e.refHeight, shearExp: e.shearExp,
+        turbulence: e.turbulence * (1 + 0.6 * rain), lengthScale: e.lengthScale, timeScale: e.timeScale, seed: e.seed,
       });
     }
+
+    // ---- 天候 ----
+    let practiceWeather = new WeatherTimeline(Date.now() & 0x7fffffff, setup.environment.weather, Date.now());
+    let serverOffset = 0;            // サーバー時計 − 自分の時計 [ms]
+    let practiceWarned = false;
+    let nextLightning = 0;
+
+    /** 今見えている天候: 試合中 (結果表示中も含む) はサーバーの天候、それ以外はプラクティスの天候 */
+    function updateWeather(dt) {
+      const nowLocal = Date.now();
+      let snap, now;
+      if (matchView.value && match.value.weather && match.value.status === 'running') {
+        snap = match.value.weather;
+        now = nowLocal + serverOffset;
+      } else {
+        practiceWeather.tick(nowLocal);
+        snap = practiceWeather.snapshot(nowLocal);
+        now = nowLocal;
+      }
+      const phase = phaseAt(snap, now);
+      const look = phase === 'approach' ? 'rain' : phase === null && snap.kind === 'storm' ? 'rain' : snap.kind;
+      const prev = ui.weather;
+      const def = WEATHER[look];
+      ui.weather = {
+        kind: snap.kind, look, label: phase === 'approach' ? '雷雲接近' : def.label, icon: phase === 'approach' ? '🌩' : def.icon,
+        rain: def.rain, visibility: def.visibility, phase,
+        countdown: snap.storm ? Math.max(0, ((phase === 'approach' ? snap.storm.arriveAt : snap.storm.deadline) - now) / 1000) : 0,
+        endIn: snap.storm ? Math.max(0, (snap.storm.endAt - now) / 1000) : 0,
+      };
+      if (look !== prev.look) {
+        scene?.setWeather(look);
+        rebuildWind();
+      }
+      if (phase !== prev.phase) onStormPhase(phase, prev.phase);
+      // プラクティスで避難しなかった場合は警告だけ
+      if (!inMatch.value && phase === 'storm' && !ui.practiceSheltered && !practiceWarned && now >= snap.storm.deadline) {
+        practiceWarned = true;
+        ui.message = '避難しませんでした。試合なら失格です';
+      }
+      // 稲妻: 雷雲の到来後は近くに、接近中は遠くでときどき光る
+      if (phase && nowLocal >= nextLightning) {
+        const near = phase === 'storm';
+        scene?.lightning(near);
+        thunderSound(near);
+        nextLightning = nowLocal + (near ? 2500 + Math.random() * 5000 : 3500 + Math.random() * 5000);
+      }
+      scene?.setArcherPresent(!sheltered.value && !eliminated.value);
+    }
+
+    function onStormPhase(phase, prev) {
+      if (phase === 'approach') {
+        ui.message = '遠くで雷鳴… 雷雲が近づいています';
+        nextLightning = Date.now() + 800;
+      } else if (phase === 'storm') {
+        // 雷雲到来: 射撃中止。引いている矢は戻す
+        sirenSound();
+        cancelDraw();
+        ui.autoEnd = false;
+        nextLightning = Date.now() + 300;
+      } else if (prev) {
+        ui.practiceSheltered = false;
+        practiceWarned = false;
+        ui.message = '雷雲が通過しました。射撃を再開してください';
+      }
+    }
+
+    function cancelDraw() {
+      if (ui.phase === 'drawing' || ui.phase === 'aiming') {
+        ui.phase = 'idle';
+        scene?.setDraw(0);
+      }
+    }
+
+    function evacuate() {
+      if (!ui.weather.phase || sheltered.value || eliminated.value) return;
+      cancelDraw();
+      ui.autoEnd = false;
+      if (inMatch.value) net?.send({ type: 'evacuate' });
+      else ui.practiceSheltered = true;
+    }
+
+    // プラクティスの天候モード (ランダム / 晴れ固定) を変えたら作り直す
+    watch(() => setup.environment.weather, (mode) => {
+      if (!matchView.value) practiceWeather = new WeatherTimeline(Date.now() & 0x7fffffff, mode, Date.now());
+    });
 
     function startMatch() {
       if (!online.state?.canStart) return;
@@ -204,6 +346,7 @@ const App = {
 
     function onServerState(state) {
       online.state = state;
+      if (state.serverNow) serverOffset = state.serverNow - Date.now();
       const m = state.match;
       const participant = m && m.participants.includes(state.you);
       if (m && m.status === 'running' && participant && localMatchId.value !== m.id) enterMatch(m);
@@ -310,7 +453,7 @@ const App = {
         drawDeltaIn = -Math.min(0.12, (late - 1.0) * 0.04);
         note = 'クリッカー後に保持しすぎ (戻り)';
       }
-      const result = shoot(toRaw(setup), prep, { rng, wind, time: simTime, bowMotion: true, sway: { ...currentSway }, drawDeltaIn });
+      const result = shoot(toRaw(setup), prep, { rng, wind, time: simTime, bowMotion: true, sway: { ...currentSway }, drawDeltaIn, rain: ui.weather.rain });
       result.note = note;
       pendingResult = result;
       scene.launch(result, shotsInEnd.value);
@@ -359,7 +502,7 @@ const App = {
       while (!isComplete(card.value) && n < 72) {
         simTime += 25 + rng.uniform() * 15;
         const sway = aimSway(toRaw(setup), prep, simTime);
-        const r = shoot(toRaw(setup), prep, { rng, wind, time: simTime, sway });
+        const r = shoot(toRaw(setup), prep, { rng, wind, time: simTime, sway, rain: ui.weather.rain });
         r.note = '一括シミュレーション';
         recordShot(r);
         n++;
@@ -375,9 +518,13 @@ const App = {
     }
 
     function onKey(e) {
-      if (e.code !== 'Space') return;
       const tag = (e.target.tagName || '').toLowerCase();
       if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
+      if (e.code === 'KeyE') {
+        evacuate();
+        return;
+      }
+      if (e.code !== 'Space') return;
       e.preventDefault();
       if (e.repeat) return;
       if (ui.phase === 'idle') startDraw();
@@ -441,6 +588,7 @@ const App = {
 
       if (now - lastUi > 100) {
         lastUi = now;
+        updateWeather();
         const w = wind.at(0, 2, 0, simTime);
         ui.wind = { speed: Math.hypot(w[0], w[2]), dir: (toDeg(Math.atan2(w[0], w[2])) + 360) % 360, x: w[0], z: w[2] };
         paintPip();
@@ -458,7 +606,7 @@ const App = {
         aim: aim ?? { x: 0, y: 0 }, ringM: (SIGHT_RING_M * D) / r, pinM: (SIGHT_PIN_M * D) / r,
         xMm: setup.sight.xMm, yMm: setup.sight.yMm, predicted,
       } : null;
-      drawPip(pip.value, prep.face, impacts.value, card.value.ends.length, aim, prep.arrow.d, sight);
+      drawPip(pip.value, prep.face, impacts.value, card.value.ends.length, aim, prep.arrow.d, sight, 1 - ui.weather.visibility);
     }
 
     onMounted(async () => {
@@ -476,7 +624,11 @@ const App = {
         onError: (e) => { ui.message = e; },
         getName: () => online.name,
       });
-      window.__sim = { setup, ui, card, impacts, release, startDraw, simulateRest, online, startMatch, scene: () => scene };
+      window.__sim = {
+        setup, ui, card, impacts, release, startDraw, simulateRest, online, startMatch, evacuate, scene: () => scene,
+        practiceStorm: () => practiceWeather.startStorm(Date.now()),
+        serverStorm: () => net?.send({ type: 'debugStorm' }),
+      };
       requestAnimationFrame(frame);
     });
 
@@ -486,7 +638,7 @@ const App = {
     return {
       setup, ui, card, impacts, last, info, view, pip, sheet, arrowsShown, roundDone, suggestion,
       online, match, myId, matchView, inMatch, connectedCount, waitingOthers, shootBlocked,
-      startMatch, saveName, leaveMatch, toggleSight,
+      startMatch, saveName, leaveMatch, toggleSight, evacuate, sheltered, eliminated,
       startDraw, release, shootEnd, simulateRest, newRound, doAutoSight, applySuggestion, nudge, setMode,
       fmt, mismatchLabel, SHOT_COLORS, ENDS, ARROWS_PER_END,
       materials: ARROW_MATERIALS, vaneShapes: VANE_SHAPES, vaneMaterials: VANE_MATERIALS,

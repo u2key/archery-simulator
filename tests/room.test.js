@@ -103,3 +103,56 @@ test('試合後も、退出した選手の名前は結果に残る', () => {
   assert.equal(r.match.status, 'finished');
   assert.equal(r.snapshot('a').match.standings.find((s) => s.id === 'b').name, 'Bob');
 });
+
+test('天候: 雷雲が来てから期限内に避難しなかった選手は失格。避難した選手は通過後に再開できる', () => {
+  const r = new Room();
+  r.join('a', 'A'); r.join('b', 'B'); r.join('c', 'C');
+  const t0 = 1_000_000;
+  r.start('a', { arrows: 12, distance: 70, environment: { weather: 'random' } }, t0);
+  const w = r.match.weather;
+  w.startStorm(t0);
+  assert.equal(w.phase(t0 + 1000), 'approach');
+  assert.equal(r.evacuate('a', t0 + 1000).ok, true, '接近中に早めに避難してもよい');
+  r.leave('c');   // 切断中の選手は失格にしない
+  const s = w.storm;
+  assert.equal(w.phase(s.arriveAt + 1), 'storm');
+  assert.equal(r.tick(s.deadline - 1), false);
+  assert.ok(r.tick(s.deadline + 1));
+  assert.deepEqual([...r.match.eliminated], ['b']);
+  assert.equal(r.recordArrow('b', { matchId: r.match.id, n: 0, end: 1, value: 10 }).ok, false, '失格者は記録できない');
+  assert.equal(r.evacuate('b', s.deadline + 2).ok, false);
+  // 通過すると避難が解ける
+  r.tick(s.endAt + 1);
+  assert.equal(r.match.weather.storm, null);
+  assert.equal(r.match.weather.kind, 'rain');
+  assert.equal(r.match.sheltered.size, 0);
+  // 失格者を待たずに進行する
+  shootEnd(r, 'a');
+  assert.equal(r.match.currentEnd, 2);
+  const st = r.standings();
+  assert.equal(st[st.length - 1].id, 'b');
+  assert.equal(st[st.length - 1].rank, null);
+  assert.equal(st[st.length - 1].eliminated, true);
+});
+
+test('天候: 全員が失格したら試合終了。雷雲がないときは避難できない', () => {
+  const r = new Room();
+  r.join('a', 'A'); r.join('b', 'B');
+  const t0 = 5_000_000;
+  r.start('a', { arrows: 6, distance: 18 }, t0);
+  assert.equal(r.evacuate('a', t0).ok, false);
+  r.match.weather.startStorm(t0);
+  r.tick(r.match.weather.storm.deadline + 1);
+  assert.equal(r.match.status, 'finished');
+});
+
+test('天候: 晴れ固定なら雷雨にならず、ランダムなら遷移する', async () => {
+  const { WeatherTimeline } = await import('../src/physics/weather.js');
+  const clear = new WeatherTimeline(3, 'clear', 0);
+  for (let t = 0; t < 3_600_000; t += 10_000) clear.tick(t);
+  assert.equal(clear.kind, 'clear');
+  const seen = new Set();
+  const rnd = new WeatherTimeline(7, 'random', 0);
+  for (let t = 0; t < 4 * 3_600_000; t += 5_000) { rnd.tick(t); seen.add(rnd.kind); }
+  for (const k of ['clear', 'cloudy', 'rain', 'storm']) assert.ok(seen.has(k), k);
+});
