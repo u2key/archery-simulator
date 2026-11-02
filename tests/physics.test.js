@@ -297,3 +297,10 @@ test('3.3 Vバーはエクステンダーでライザーから約10cm前に出�
     assert.deepEqual(model.parts.find((p) => p.name === name).from, vbar, name);
   }
 });
+
+test('射距離はシューティングラインから測る: ボウから的までは射距離より短い', () => {
+  const s = defaultSetup();
+  const prep = prepare(s);
+  assert.ok(prep.lineZ < prep.eye[2]);
+  close(prep.D - prep.lineZ, s.environment.distance, 1e-9, 'line to target');
+});

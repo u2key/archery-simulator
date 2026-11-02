@@ -21,6 +21,8 @@ const BOW_TO_ARROW = 0.6;        // 矢が離れる瞬間のボウの傾きの�
 const SPINE_YAW_MRAD = 4;        // スパイン不一致 100% あたりの左右偏差
 const NOCK_OPT_MM = 10, TILLER_OPT_MM = 4;
 const NOISE_STD = 0.28 * Math.hypot(1, 0.5);
+// 射手はシューティングラインをまたいで立つ。体の中心 (=ライン) はアンカー位置よりこれだけ後ろ [m]
+export const STANCE_BEHIND_ANCHOR = 0.11;
 
 export function prepare(setup) {
   const drawIn = drawLengthIn(setup.player);
@@ -32,7 +34,10 @@ export function prepare(setup) {
   const v0 = launchSpeed(setup.bow, drawIn, arrow.mass, REST_FRICTION[setup.bow.rest] * 0.06);
   const hArrow = setup.player.heightCm * 0.0083;
   const eye = [0, hArrow + EYE_ABOVE_ARROW, -drawIn * INCH];
-  const D = setup.environment.distance;
+  // 射距離はシューティングラインから的面まで (WA 規則)。ボウ (z=0) はラインより前に出ているので、
+  // ボウから的までの距離 D は射距離より短い。
+  const lineZ = eye[2] - STANCE_BEHIND_ANCHOR;
+  const D = setup.environment.distance + lineZ;
   const eyeElev = Math.atan2(TARGET_CENTER_HEIGHT - eye[1], D - eye[2]);
   const skill = setup.player.skill;
   const swaySigma = {
@@ -41,8 +46,8 @@ export function prepare(setup) {
     azim: skill * SWAY_MRAD * MRAD * Math.sqrt((I_REF.yaw + HAND_INERTIA[1]) / (I[1][1] + HAND_INERTIA[1])),
   };
   return {
-    drawIn, lbs, arrow, model, I, cDamp, v0, hArrow, eye, eyeElev, swaySigma, D,
-    face: faceDiameterCm(D),
+    drawIn, lbs, arrow, model, I, cDamp, v0, hArrow, eye, eyeElev, swaySigma, D, lineZ,
+    face: faceDiameterCm(setup.environment.distance),
     swayNoise: createNoise4D(setup.environment.seed + 101),
   };
 }

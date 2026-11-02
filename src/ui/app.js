@@ -97,7 +97,8 @@ const App = {
         face: prep.face,
       };
       if (scene) {
-        if (full) scene.setRange(s.environment.distance, prep.face);
+        // 的の z はライン位置 (=引き尺) にも依存するので、D が変わったら射場を作り直す
+        if (full || scene.distance !== prep.D) scene.setRange(prep);
         scene.setBow(prep, s);
       }
     }
@@ -314,7 +315,7 @@ const App = {
 
     function paintPip() {
       if (!pip.value || !prep) return;
-      const D = setup.environment.distance;
+      const D = prep.D - prep.eye[2];   // 目から的までの距離
       const aim = ui.phase === 'aiming' || ui.phase === 'drawing' ? { x: Math.tan(currentSway.azim) * D, y: Math.tan(currentSway.elev) * D } : null;
       drawPip(pip.value, prep.face, impacts.value, card.value.ends.length, aim, prep.arrow.d);
     }
