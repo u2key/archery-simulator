@@ -9,6 +9,7 @@ import { storedEnergy } from '../physics/bow.js';
 import { createScoreCard, addArrow, summary, isComplete, ENDS, ARROWS_PER_END } from '../physics/scoring.js';
 import { applyCorrection, correctionMm, groupCenter } from '../physics/sight.js';
 import { toDeg } from '../physics/units.js';
+import { connectMatchServer } from './net.js';
 
 const DRAW_TIME = 0.9;
 const BOW_ANIM_TIME = 1.6;
@@ -40,6 +41,13 @@ function clickSound() {
   } catch { /* 音が出せない環境では無視 */ }
 }
 
+function loadName() {
+  try { return localStorage.getItem('archery.name') || ''; } catch { return ''; }
+}
+
+// スコアカードの矢 (表示用) とサーバーの記録 ({value,label,x,dx,dy}) の相互変換
+const cardArrow = (a) => ({ value: a.value, label: a.label, x: a.x });
+
 const App = {
   components: { NumField },
   setup() {
@@ -65,7 +73,21 @@ const App = {
       const e = ends[ends.length - 1];
       return e.length >= ARROWS_PER_END ? 0 : e.length;
     });
-    const roundDone = computed(() => isComplete(card.value));
+
+    // ---- オンライン試合 ----
+    // 試合をしていない間 (ロビー) は従来どおりのプラクティス。試合が始まると出場者のスコアカードを試合用に切り替える。
+    const online = reactive({ status: 'connecting', state: null, name: loadName(), arrows: 36, error: '' });
+    const localMatchId = ref(null);      // このクライアントが出場中 (または結果表示中) の試合
+    let net = null, practiceSaved = null, skipNewRound = false;
+    const match = computed(() => online.state?.match ?? null);
+    const myId = computed(() => online.state?.you ?? null);
+    const matchView = computed(() => !!match.value && match.value.id === localMatchId.value);
+    const inMatch = computed(() => matchView.value && match.value.status === 'running');
+    const connectedCount = computed(() => (online.state?.players ?? []).filter((p) => p.connected).length);
+    // 自分は今のエンドを射ち終えて、他の選手を待っている
+    const waitingOthers = computed(() => inMatch.value && sheet.value.arrows >= match.value.currentEnd * ARROWS_PER_END);
+    const roundDone = computed(() => isComplete(card.value) || (matchView.value && match.value.status !== 'running'));
+    const shootBlocked = computed(() => roundDone.value || waitingOthers.value);
     const arrowsShown = computed(() => card.value.ends[card.value.ends.length - 1].length);
 
     let messageTimer = null;
@@ -111,6 +133,91 @@ const App = {
       });
     }
 
+    function startMatch() {
+      if (!online.state?.canStart) return;
+      const env = toRaw(setup).environment;
+      net?.send({ type: 'start', arrows: online.arrows, distance: env.distance, environment: env });
+    }
+
+    function saveName() {
+      online.name = online.name.trim().slice(0, 20);
+      try { localStorage.setItem('archery.name', online.name); } catch { /* 保存できなくても続行 */ }
+      if (online.name) net?.send({ type: 'rename', name: online.name });
+    }
+
+    /** サーバーの自分の記録からスコアカードと着弾点を作り直す (再接続・切断中に M で埋められた場合) */
+    function loadMine(m) {
+      const c = createScoreCard(m.ends);
+      if (m.mine?.length) c.ends = m.mine.map((e) => e.map(cardArrow));
+      card.value = c;
+      impacts.value = (m.mine ?? []).flatMap((e, i) => e.map((a, j) => (
+        { dx: a.dx ?? 0, dy: a.dy ?? 0, end: i + 1, shot: j + 1, label: a.label, reached: a.dx !== null })));
+    }
+
+    function enterMatch(m) {
+      if (!localMatchId.value) {
+        practiceSaved = { card: card.value, impacts: impacts.value, last: last.value, environment: { ...toRaw(setup.environment) } };
+      }
+      localMatchId.value = m.id;
+      ui.autoEnd = false;
+      // 引いている途中・飛んでいる矢はプラクティスの矢として捨てる
+      if (ui.phase === 'drawing' || ui.phase === 'aiming') {
+        ui.phase = 'idle';
+        scene?.setDraw(0);
+      }
+      if (pendingResult) pendingResult.recorded = true;
+      loadMine(m);
+      last.value = null;
+      scene?.clearStuck();
+      // 全員が同じ距離・風で射つ
+      Object.assign(setup.environment, m.environment);
+      ui.message = `試合開始: ${m.arrows} 射 (${m.ends} エンド) / ${m.distance} m`;
+    }
+
+    /** 試合の記録とクライアントの記録を突き合わせる */
+    function syncMatch(m) {
+      const serverN = (m.mine ?? []).flat().length;
+      const local = card.value.ends.flat();
+      if (serverN > local.length) {
+        loadMine(m);          // 切断中にエンドが進み、残りが M になった
+      } else if (serverN < local.length) {
+        // 送れなかった矢を再送する (サーバーは通算本数 n で重複を弾く)
+        const flatImpacts = impacts.value;
+        for (let n = serverN; n < local.length; n++) {
+          const end = Math.floor(n / ARROWS_PER_END) + 1;
+          const imp = flatImpacts[n];
+          net?.send({ type: 'arrow', matchId: m.id, n, end, ...local[n], dx: imp?.reached ? imp.dx : null, dy: imp?.reached ? imp.dy : null });
+        }
+      }
+    }
+
+    function onServerState(state) {
+      online.state = state;
+      const m = state.match;
+      const participant = m && m.participants.includes(state.you);
+      if (m && m.status === 'running' && participant && localMatchId.value !== m.id) enterMatch(m);
+      else if (m && m.id === localMatchId.value && m.status === 'running') syncMatch(m);
+      else if (localMatchId.value && (!m || m.id !== localMatchId.value)) leaveMatch('試合が打ち切られました');
+    }
+
+    /** 試合を抜けてプラクティスに戻る (結果を閉じる・打ち切り) */
+    function leaveMatch(note) {
+      localMatchId.value = null;
+      ui.autoEnd = false;
+      if (practiceSaved) {
+        card.value = practiceSaved.card;
+        impacts.value = practiceSaved.impacts;
+        last.value = practiceSaved.last;
+        if (practiceSaved.environment.distance !== setup.environment.distance) skipNewRound = true;
+        Object.assign(setup.environment, practiceSaved.environment);
+        practiceSaved = null;
+      } else {
+        newRound();
+      }
+      scene?.clearStuck();
+      ui.message = note ?? 'プラクティスに戻りました';
+    }
+
     function newRound() {
       card.value = createScoreCard();
       impacts.value = [];
@@ -128,7 +235,10 @@ const App = {
         if (JSON.stringify(a.environment) !== JSON.stringify(b.environment)) rebuildWind();
         rebuild(distChanged);
         if (distChanged) {
-          newRound();
+          // 試合の開始・終了で距離が変わったときは、スコアカードはそちらで用意済み
+          if (localMatchId.value || skipNewRound) scene?.clearStuck();
+          else newRound();
+          skipNewRound = false;
           doAutoSight();
         }
       }, 120);
@@ -156,7 +266,7 @@ const App = {
 
     // ---- 射撃の流れ: idle → drawing → aiming (クリッカー) → flight → idle ----
     function startDraw() {
-      if (ui.phase !== 'idle' || roundDone.value) return;
+      if (ui.phase !== 'idle' || shootBlocked.value) return;
       if (shotsInEnd.value === 0) scene.clearStuck();
       ui.phase = 'drawing';
       tPhase = 0;
@@ -200,6 +310,13 @@ const App = {
       const shot = card.value.ends[card.value.ends.length - 1].length;
       impacts.value.push({ dx: result.dx, dy: result.dy, end, shot, label: result.score.label, reached: result.flight.reached });
       card.value = { ...card.value };
+      if (inMatch.value) {
+        const n = card.value.ends.flat().length - 1;
+        net?.send({
+          type: 'arrow', matchId: match.value.id, n, end, ...cardArrow(result.score),
+          dx: result.flight.reached ? result.dx : null, dy: result.flight.reached ? result.dy : null,
+        });
+      }
       // 自動射撃・一括計算では、射手と同じくエンドが終わるたびにグループ中心へサイトを動かす
       if (ui.autoCorrect && (ui.autoEnd || result.note === '一括シミュレーション') && shot === ARROWS_PER_END) {
         const pts = impacts.value.filter((p) => p.end === end && p.reached);
@@ -220,7 +337,7 @@ const App = {
 
     // 残り全射を一括で計算する (アニメーションなし)
     function simulateRest() {
-      if (ui.phase !== 'idle') return;
+      if (ui.phase !== 'idle' || matchView.value) return;
       let n = 0;
       while (!isComplete(card.value) && n < 72) {
         simTime += 25 + rng.uniform() * 15;
@@ -235,6 +352,7 @@ const App = {
     }
 
     function shootEnd() {
+      if (matchView.value) return;
       ui.autoEnd = true;
       if (ui.phase === 'idle') startDraw();
     }
@@ -329,7 +447,13 @@ const App = {
       rebuild(false);
       scene.setMode(ui.mode);
       window.addEventListener('keydown', onKey);
-      window.__sim = { setup, ui, card, impacts, release, startDraw, simulateRest, scene: () => scene };
+      net = connectMatchServer({
+        onStatus: (st) => { online.status = st; },
+        onState: onServerState,
+        onError: (e) => { ui.message = e; },
+        getName: () => online.name,
+      });
+      window.__sim = { setup, ui, card, impacts, release, startDraw, simulateRest, online, startMatch, scene: () => scene };
       requestAnimationFrame(frame);
     });
 
@@ -338,6 +462,8 @@ const App = {
 
     return {
       setup, ui, card, impacts, last, info, view, pip, sheet, arrowsShown, roundDone, suggestion,
+      online, match, myId, matchView, inMatch, connectedCount, waitingOthers, shootBlocked,
+      startMatch, saveName, leaveMatch,
       startDraw, release, shootEnd, simulateRest, newRound, doAutoSight, applySuggestion, nudge, setMode,
       fmt, mismatchLabel, SHOT_COLORS, ENDS, ARROWS_PER_END,
       materials: ARROW_MATERIALS, vaneShapes: VANE_SHAPES, vaneMaterials: VANE_MATERIALS,
