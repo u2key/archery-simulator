@@ -22,7 +22,7 @@ const SPINE_YAW_MRAD = 4;        // スパイン不一致 100% あたりの左�
 const NOCK_OPT_MM = 10, TILLER_OPT_MM = 4;
 const NOISE_STD = 0.28 * Math.hypot(1, 0.5);
 // 射手はシューティングラインをまたいで立つ。体の中心 (=ライン) はアンカー位置よりこれだけ後ろ [m]
-export const STANCE_BEHIND_ANCHOR = 0.11;
+export const STANCE_BEHIND_ANCHOR = 0.13;
 
 export function prepare(setup) {
   const drawIn = drawLengthIn(setup.player);

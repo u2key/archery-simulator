@@ -8,7 +8,7 @@ import { INCH } from '../physics/units.js';
 
 const PARTICLES = 1400;
 const GRIP_BELOW_ARROW = 0.03;   // 矢はグリップのピボットより少し上を通る
-const SHOULDER_YAW = (28 * Math.PI) / 180;   // 肩の線が矢のラインから背中側へ開く角度
+const SHOULDER_PROTRACT_MAX = 0.12;   // 弦に手が届かないとき、引き手の肩 (肩甲骨) を前へ出せる量 [m]
 
 const v3 = (a) => new THREE.Vector3(a[0], a[1], a[2]);
 // 物理は x=右 (射手から見て), y=上, z=的方向 の左手系。Three.js は右手系なので、ワールド全体を x 反転した
@@ -335,14 +335,12 @@ export class RangeScene {
     const yShoulder = yA - 0.07;
     const torso = 0.29 * H;                   // 肩〜股関節
     const yHip = yShoulder - torso;
-    // 肩の線: 弓手の肩はあごのすぐ横 (矢のラインの少し後ろ側)。そこから背中側へ SHOULDER_YAW だけ開いて
-    // 引き手の肩がある。こうすると引き手の肘が矢の延長線上の後方に来る。
-    const yaw = SHOULDER_YAW;
-    const shoulderDir = P(-Math.sin(yaw), 0, -Math.cos(yaw));
-    const bowSh = P(-0.07 * k, yShoulder, eye.z + 0.04 * k);
-    const sh = { bow: bowSh, draw: bowSh.clone().add(shoulderDir.clone().multiplyScalar(0.34 * k)) };
+    // 胴は的に対して真横 (肩の線は射線と平行) を保つ。弓手の肩はあごのすぐ横、胸の前面が弦をかすめる位置。
+    // 引き手の肩はその真後ろ (肩幅分)。
+    const xSpine = -0.12 * k;
+    const bowSh = P(xSpine + 0.01, yShoulder, eye.z + 0.04 * k);
+    const sh = { bow: bowSh, draw: bowSh.clone().add(P(0, 0, -0.34 * k)) };
     const chestC = sh.bow.clone().lerp(sh.draw, 0.5);
-    const xSpine = chestC.x;
     this.body = { k, H, yA, sh, upper: 0.172 * H, fore: 0.152 * H };
 
     // ---- 脚: 肩幅に開き、ラインの前後に1本ずつ ----
@@ -372,20 +370,21 @@ export class RangeScene {
       legs.push(hipJ);
     }
 
-    // ---- 胴体: 局所座標 (x=胸の正面, z=弓手側) で作って肩の線の向きに回す。腰は肩ほどは開かない ----
+    // ---- 胴体: 局所座標 (x=胸の正面, z=弓手側) ----
     const chest = new THREE.Group();
     chest.position.set(chestC.x, 0, chestC.z);
-    chest.rotation.y = yaw;
     const pelvis = new THREE.Group();
     pelvis.position.set(xSpine, 0, zLine);
-    pelvis.rotation.y = yaw * 0.35;
     pelvis.add(ellipsoid(0.105 * k, 0.11 * k, 0.17 * k, pants, P(0, yHip + 0.04 * k, 0)));            // 骨盤
     pelvis.add(ellipsoid(0.108 * k, 0.025, 0.155 * k, gear, P(0, yHip + 0.1 * k, 0)));                // ベルト
     chest.add(ellipsoid(0.1 * k, 0.17 * k, 0.145 * k, shirtDark, P(0, yHip + 0.2 * k, 0)));          // 腹
     chest.add(ellipsoid(0.115 * k, 0.17 * k, 0.175 * k, shirt, P(0.005, yShoulder - 0.12 * k, 0)));  // 胸
     chest.add(ellipsoid(0.02, 0.13 * k, 0.1 * k, gear, P(0.1 * k, yShoulder - 0.12 * k, 0.07 * k))); // チェストガード (弓手側の胸)
     g.add(chest, pelvis);
-    for (const s of [sh.bow, sh.draw]) g.add(ellipsoid(0.058 * k, 0.058 * k, 0.058 * k, shirt, s));
+    g.add(ellipsoid(0.058 * k, 0.058 * k, 0.058 * k, shirt, sh.bow));
+    // 引き手の肩は弦へ手を伸ばすときに前へ出るので poseArcher で動かす
+    this.drawShoulder = ellipsoid(0.058 * k, 0.058 * k, 0.058 * k, shirt, sh.draw);
+    g.add(this.drawShoulder);
     // ベルトとクイーバー (引き手側の腰)
     const qTop = P(xSpine + 0.06, yHip + 0.06, zLine - 0.2 * k), qBot = P(xSpine + 0.1, yHip - 0.32, zLine - 0.12 * k);
     const quiver = makeBone(0.045, 0.035, gear);
@@ -448,17 +447,25 @@ export class RangeScene {
       arm.hand.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), hd.normalize());
       return { joint, end };
     };
-    // 弓手: 手首はグリップの少し後ろ。肘は弦を避けて外側 (−x) へ逃がす
+    // 弓手: 的に向けてまっすぐ伸ばす (肘は弦を避けて外側 −x へわずかに回すだけ)。手首はグリップの少し後ろ
     const grip = P(0.0, this.gripY, -0.005);
-    const bw = place(this.bowArm, b.sh.bow, P(-0.01, this.gripY + 0.005, -0.065 * b.k), grip, P(-1, -0.4, 0));
+    const bw = place(this.bowArm, b.sh.bow, P(-0.01, this.gripY + 0.005, -0.065 * b.k), grip, P(-1, -0.3, 0));
     this.armGuard.update(bw.joint.clone().lerp(bw.end, 0.35), bw.end.clone().lerp(bw.joint, 0.05));
 
-    // 引き手: 指は弦のノッキング位置。肘は矢の延長線上の後ろ・やや上へ
+    // 引き手: 指は弦のノッキング位置 (フルドローではあご下のアンカー)。左腕と重ならないよう、
+    // 腕は体の前 (胸の側 +x) を回し、手の甲はあごの右側 (+x) に沿わせる。肘も胸の側・やや後ろへ出す。
     let fingers;
-    if (this.released) fingers = P(0.03, b.yA - 0.02, this.prep.eye[2] - 0.2 * b.k);   // フォロースルー
+    if (this.released) fingers = P(0.06 * b.k, b.yA - 0.02, this.prep.eye[2] - 0.2 * b.k);   // フォロースルー
     else fingers = P(0, b.yA - 0.005, this.stringZ ?? -0.2);
-    const wrist = fingers.clone().add(P(0.03 * b.k, -0.015, -0.075 * b.k));
-    const dw = place(this.drawArm, b.sh.draw, wrist, fingers, P(0.55, 0.05, -0.84));
+    const wrist = fingers.clone().add(P(0.055 * b.k, -0.02, -0.07 * b.k));
+    // 弦がまだ遠い (引き始め) ときは、肩甲骨ごと肩を前へ出して届かせる
+    const shoulder = b.sh.draw.clone();
+    const reach = (b.upper + b.fore) * 0.98;
+    const toWrist = wrist.clone().sub(shoulder);
+    const excess = toWrist.length() - reach;
+    if (excess > 0) shoulder.add(toWrist.normalize().multiplyScalar(Math.min(excess, SHOULDER_PROTRACT_MAX)));
+    this.drawShoulder.position.copy(shoulder);
+    const dw = place(this.drawArm, shoulder, wrist, fingers, P(1, 0.1, -0.5));
     this.tab.position.copy(dw.end.clone().lerp(fingers, 0.7));
     this.tab.quaternion.copy(this.drawArm.hand.quaternion);
   }
