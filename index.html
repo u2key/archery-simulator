@@ -183,9 +183,21 @@
       <div>
         <div class="flex justify-between text-xs text-slate-400 mb-1">
           <span>ターゲット拡大 ({{ setup.environment.distance }}m / {{ info?.face }}cm 的)</span>
-          <span class="flex gap-1"><span v-for="(c, i) in SHOT_COLORS" :key="i" class="inline-block w-2.5 h-2.5 rounded-full" :style="{ background: c }" :title="(i + 1) + '本目'"></span></span>
+          <span class="flex items-center gap-2">
+            <span class="flex gap-1"><span v-for="(c, i) in SHOT_COLORS" :key="i" class="inline-block w-2.5 h-2.5 rounded-full" :style="{ background: c }" :title="(i + 1) + '本目'"></span></span>
+            <button class="px-1.5 py-0.5 rounded border text-[11px]" :class="ui.showSight ? 'border-emerald-500 text-emerald-300 bg-emerald-900/40' : 'border-slate-600 text-slate-400'"
+                    title="サイトの映り込み (ハウジング・ピン・目盛り・着弾予想) を表示" @click="toggleSight">サイト {{ ui.showSight ? 'ON' : 'OFF' }}</button>
+          </span>
         </div>
         <canvas ref="pip" class="w-full aspect-square rounded"></canvas>
+        <div v-if="ui.showSight" class="mt-1 flex items-center gap-1.5 text-xs whitespace-nowrap">
+          <span class="text-slate-400">ピン</span>
+          <button class="px-1.5 rounded bg-slate-700 hover:bg-slate-600" title="上へ 0.5mm" @click="nudge('yMm', 0.5)">▲</button>
+          <button class="px-1.5 rounded bg-slate-700 hover:bg-slate-600" title="下へ 0.5mm" @click="nudge('yMm', -0.5)">▼</button>
+          <button class="px-1.5 rounded bg-slate-700 hover:bg-slate-600" title="左へ 0.5mm" @click="nudge('xMm', -0.5)">◀</button>
+          <button class="px-1.5 rounded bg-slate-700 hover:bg-slate-600" title="右へ 0.5mm" @click="nudge('xMm', 0.5)">▶</button>
+          <span class="ml-auto text-[11px] text-orange-400" title="無風・ばらつきなしで射ったときの着弾 (ピンを動かすと逆向きに動く)">◌ 予想 = 無風・理想射の着弾</span>
+        </div>
       </div>
 
       <div class="flex items-center gap-3 rounded bg-slate-800/60 p-2">

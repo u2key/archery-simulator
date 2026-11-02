@@ -12,6 +12,13 @@ import { toDeg } from '../physics/units.js';
 import { connectMatchServer } from './net.js';
 
 const DRAW_TIME = 0.9;
+// サイトの映り込み: ハウジング内径とピン先の実寸 [m]
+const SIGHT_RING_M = 0.011;
+const SIGHT_PIN_M = 0.0012;
+
+function loadShowSight() {
+  try { return localStorage.getItem('archery.showSight') !== '0'; } catch { return true; }
+}
 const BOW_ANIM_TIME = 1.6;
 
 const NumField = {
@@ -55,6 +62,7 @@ const App = {
     const ui = reactive({
       mode: 'third', phase: 'idle', autoEnd: false, slow: 1, exaggerate: 1, tab: 'bow',
       clicker: 0, clicked: false, wind: { speed: 0, dir: 0 }, message: '', settingsOpen: true, autoCorrect: true,
+      showSight: loadShowSight(),
     });
     const card = ref(createScoreCard());
     const impacts = ref([]);
@@ -64,6 +72,7 @@ const App = {
     const pip = ref(null);
 
     let scene, prep, wind, rng = createRng(12345);
+    let predicted = null;   // 今のサイト設定で無風・理想射したときの着弾 [m]
     let simTime = 0, tPhase = 0, tClick = 2, pendingResult = null;
     let currentSway = { elev: 0, azim: 0 };
 
@@ -118,6 +127,8 @@ const App = {
         I: prep.I, cDamp: prep.cDamp, bowMass: prep.model.mass, cg: prep.model.cg, warnings: a.warnings, stable: a.stable,
         face: prep.face,
       };
+      const ideal = shoot(s, prep, { noise: false });
+      predicted = ideal.flight.reached ? { x: ideal.dx, y: ideal.dy } : null;
       if (scene) {
         // 的の z はライン位置 (=引き尺) にも依存するので、D が変わったら射場を作り直す
         if (full || scene.distance !== prep.D) scene.setRange(prep);
@@ -258,6 +269,12 @@ const App = {
       setup.sight.xMm = Math.round(s.xMm * 10) / 10;
       setup.sight.yMm = Math.round(s.yMm * 10) / 10;
       ui.message = `グループ中心 (${(g.dx * 100).toFixed(1)}, ${(g.dy * 100).toFixed(1)}) cm に合わせてピンを動かしました`;
+    }
+
+    function toggleSight() {
+      ui.showSight = !ui.showSight;
+      try { localStorage.setItem('archery.showSight', ui.showSight ? '1' : '0'); } catch { /* 保存できなくても続行 */ }
+      paintPip();
     }
 
     function nudge(axis, mm) {
@@ -435,7 +452,13 @@ const App = {
       if (!pip.value || !prep) return;
       const D = prep.D - prep.eye[2];   // 目から的までの距離
       const aim = ui.phase === 'aiming' || ui.phase === 'drawing' ? { x: Math.tan(currentSway.azim) * D, y: Math.tan(currentSway.elev) * D } : null;
-      drawPip(pip.value, prep.face, impacts.value, card.value.ends.length, aim, prep.arrow.d);
+      // サイトの映り込み: 引いていない間はピンを的の中心に置いた状態で見せる
+      const r = setup.sight.radiusM;
+      const sight = ui.showSight ? {
+        aim: aim ?? { x: 0, y: 0 }, ringM: (SIGHT_RING_M * D) / r, pinM: (SIGHT_PIN_M * D) / r,
+        xMm: setup.sight.xMm, yMm: setup.sight.yMm, predicted,
+      } : null;
+      drawPip(pip.value, prep.face, impacts.value, card.value.ends.length, aim, prep.arrow.d, sight);
     }
 
     onMounted(async () => {
@@ -463,7 +486,7 @@ const App = {
     return {
       setup, ui, card, impacts, last, info, view, pip, sheet, arrowsShown, roundDone, suggestion,
       online, match, myId, matchView, inMatch, connectedCount, waitingOthers, shootBlocked,
-      startMatch, saveName, leaveMatch,
+      startMatch, saveName, leaveMatch, toggleSight,
       startDraw, release, shootEnd, simulateRest, newRound, doAutoSight, applySuggestion, nudge, setMode,
       fmt, mismatchLabel, SHOT_COLORS, ENDS, ARROWS_PER_END,
       materials: ARROW_MATERIALS, vaneShapes: VANE_SHAPES, vaneMaterials: VANE_MATERIALS,

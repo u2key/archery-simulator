@@ -52,11 +52,14 @@ export function faceCanvas(size = 1024) {
  * @param {Array<{dx:number, dy:number, end:number, shot:number, label:string}>} impacts
  * @param {number} currentEnd
  * @param {{x:number,y:number}|null} aim 照準点 (m, 的中心基準)
+ * @param {number} arrowDiameterM
+ * @param {object|null} sight  サイトの映り込み (drawSightPicture の引数)。null なら照準点の丸だけ描く
  */
-export function drawPip(canvas, faceCm, impacts, currentEnd, aim, arrowDiameterM) {
+export function drawPip(canvas, faceCm, impacts, currentEnd, aim, arrowDiameterM, sight = null) {
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (w < 40 || h < 40) return;   // 非表示・レイアウト前
   if (canvas.width !== Math.round(w * dpr)) {
     canvas.width = Math.round(w * dpr);
     canvas.height = Math.round(h * dpr);
@@ -104,7 +107,9 @@ export function drawPip(canvas, faceCm, impacts, currentEnd, aim, arrowDiameterM
     ctx.moveTo(x, y - 7); ctx.lineTo(x, y + 7);
     ctx.stroke();
   }
-  if (aim) {
+  if (sight) {
+    drawSightPicture(ctx, w, h, toPx, pxPerM, sight);
+  } else if (aim) {
     const [x, y] = toPx({ dx: aim.x, dy: aim.y });
     ctx.strokeStyle = 'rgba(0,255,140,0.95)';
     ctx.lineWidth = 1.5;
@@ -112,4 +117,131 @@ export function drawPip(canvas, faceCm, impacts, currentEnd, aim, arrowDiameterM
     ctx.arc(x, y, 6, 0, Math.PI * 2);
     ctx.stroke();
   }
+}
+
+/**
+ * 目から見たサイトの映り込み。照準器 (ハウジングのリングとピン) は実寸を的の距離に投影した大きさで描く
+ * (例: 内径 11mm・目から 85cm のハウジングは 70m 先では直径約 90cm に見える)。
+ * 右端は上下目盛り (サイトブロックの位置)、下端は左右目盛り。照準を合わせるとピンが照準点に重なる。
+ * @param {object} s
+ * @param {{x:number,y:number}} s.aim    ピンが重なっている的上の点 [m]
+ * @param {number} s.ringM  ハウジング内径の投影 [m]
+ * @param {number} s.pinM   ピン先の投影 [m]
+ * @param {number} s.xMm    ピンの左右位置 [mm]
+ * @param {number} s.yMm    ピンの上下位置 [mm]
+ * @param {{x:number,y:number}|null} s.predicted 無風・理想射での着弾予想 [m]
+ */
+export function drawSightPicture(ctx, w, h, toPx, pxPerM, s) {
+  const [px, py] = toPx({ dx: s.aim.x, dy: s.aim.y });
+  const rIn = Math.max(10, (s.ringM / 2) * pxPerM);
+  const rOut = rIn * 1.28;
+
+  // 無風・理想射の着弾予想 (ピンを動かすと逆向きに動く)
+  if (s.predicted) {
+    const [x, y] = toPx({ dx: s.predicted.x, dy: s.predicted.y });
+    ctx.save();
+    ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = '#ff7a00';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(x, y, 7, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(x - 11, y); ctx.lineTo(x - 4, y); ctx.moveTo(x + 4, y); ctx.lineTo(x + 11, y);
+    ctx.moveTo(x, y - 11); ctx.lineTo(x, y - 4); ctx.moveTo(x, y + 4); ctx.lineTo(x, y + 11);
+    ctx.stroke();
+    ctx.font = '600 10px system-ui, sans-serif';
+    ctx.fillStyle = '#ff7a00';
+    ctx.fillText('予想', x + 9, y + 15);
+    ctx.restore();
+  }
+
+  ctx.save();
+  // エクステンションバー: ハウジングから右 (ライザー側) へ。ピントが合っていないので半透明の太い帯
+  ctx.fillStyle = 'rgba(25,28,34,0.55)';
+  ctx.fillRect(px + rOut * 0.9, py - rIn * 0.22, w, rIn * 0.44);
+  // ハウジング (リング)
+  ctx.beginPath();
+  ctx.arc(px, py, rOut, 0, Math.PI * 2);
+  ctx.arc(px, py, rIn, 0, Math.PI * 2, true);
+  ctx.fillStyle = 'rgba(22,24,30,0.62)';
+  ctx.fill('evenodd');
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+  ctx.beginPath();
+  ctx.arc(px, py, rIn, 0, Math.PI * 2);
+  ctx.stroke();
+  // ピンの支柱 (下から)
+  const rp = Math.max(2.2, (s.pinM / 2) * pxPerM);
+  ctx.strokeStyle = 'rgba(22,24,30,0.9)';
+  ctx.lineWidth = Math.max(1.5, rp * 0.6);
+  ctx.beginPath();
+  ctx.moveTo(px, py + rIn);
+  ctx.lineTo(px, py + rp);
+  ctx.stroke();
+  // 水平器 (リングの下)
+  const vw = rIn * 0.7, vh = Math.max(5, (rOut - rIn) * 0.55), vy = py + (rIn + rOut) / 2;
+  ctx.fillStyle = 'rgba(120,200,120,0.85)';
+  ctx.fillRect(px - vw / 2, vy - vh / 2, vw, vh);
+  ctx.fillStyle = 'rgba(240,255,240,0.95)';
+  ctx.beginPath();
+  ctx.ellipse(px, vy, vh * 0.8, vh * 0.38, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // ピン先のファイバーの光点
+  ctx.beginPath();
+  ctx.arc(px, py, rp, 0, Math.PI * 2);
+  ctx.fillStyle = '#3dff8f';
+  ctx.shadowColor = '#3dff8f';
+  ctx.shadowBlur = 6;
+  ctx.fill();
+  ctx.restore();
+
+  // 目盛り: 上下 (右端) と左右 (下端)。目盛りがサイトブロックと一緒に動き、指標の位置が現在値
+  const MM = 3;   // 1mm あたりの px
+  ctx.save();
+  ctx.font = '10px system-ui, sans-serif';
+  const sw = 34;
+  ctx.fillStyle = 'rgba(15,23,42,0.78)';
+  ctx.fillRect(w - sw, 0, sw, h);
+  ctx.fillRect(0, h - 22, w - sw, 22);
+  ctx.strokeStyle = '#cbd5e1';
+  ctx.fillStyle = '#cbd5e1';
+  ctx.lineWidth = 1;
+  // 上下: ピンを上げると目盛りの値が増える。指標は照準点の高さ
+  for (let mm = Math.floor(s.yMm - py / MM) - 1; mm <= s.yMm + (h - py) / MM + 1; mm++) {
+    const y = py - (mm - s.yMm) * MM;
+    if (y < 0 || y > h - 22) continue;
+    const major = mm % 10 === 0, mid = mm % 5 === 0;
+    ctx.beginPath();
+    ctx.moveTo(w - sw, y + 0.5);
+    ctx.lineTo(w - sw + (major ? 12 : mid ? 8 : 4), y + 0.5);
+    ctx.stroke();
+    if (major) ctx.fillText(String(mm), w - sw + 14, y + 3.5);
+  }
+  // 左右
+  for (let mm = Math.floor(s.xMm - px / MM) - 1; mm <= s.xMm + (w - px) / MM + 1; mm++) {
+    const x = px + (mm - s.xMm) * MM;
+    if (x < 0 || x > w - sw) continue;
+    const major = mm % 10 === 0, mid = mm % 5 === 0;
+    ctx.beginPath();
+    ctx.moveTo(x + 0.5, h);
+    ctx.lineTo(x + 0.5, h - (major ? 10 : mid ? 7 : 4));
+    ctx.stroke();
+    if (major) ctx.fillText(String(mm), x - 5, h - 12);
+  }
+  // 指標
+  ctx.fillStyle = '#3dff8f';
+  const iy = Math.min(h - 26, Math.max(4, py));
+  ctx.beginPath();
+  ctx.moveTo(w - sw - 1, iy); ctx.lineTo(w - sw - 8, iy - 5); ctx.lineTo(w - sw - 8, iy + 5);
+  ctx.fill();
+  const ix = Math.min(w - sw - 4, Math.max(4, px));
+  ctx.beginPath();
+  ctx.moveTo(ix, h - 23); ctx.lineTo(ix - 5, h - 30); ctx.lineTo(ix + 5, h - 30);
+  ctx.fill();
+  ctx.font = '600 10px system-ui, sans-serif';
+  ctx.fillText(`${s.yMm.toFixed(1)}`, w - sw - 40, iy - 7);
+  ctx.fillText(`${s.xMm.toFixed(1)}`, ix + 7, h - 26);
+  ctx.restore();
 }
