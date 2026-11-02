@@ -188,6 +188,7 @@ export function rotationVector(q) {
  * @param {number} [opts.probeTime]   この時刻の回転ベクトルを返す (矢が離れる瞬間)
  * @param {boolean} [opts.free]       手・重力・スリングを外した自由剛体として解く (検証用)
  * @param {number[]} [opts.w0]        初期角速度 (ボディ座標)
+ * @param {(t:number) => number[]} [opts.extraTorque] 追加のトルク (ボディ座標)。リムの振動がハンドルを揺する分など
  */
 export function simulateBowRelease(model, I, opts) {
   const Ihand = I.map((row, i) => row.map((v, j) => (i === j ? v + HAND_INERTIA[i] : v)));
@@ -206,6 +207,7 @@ export function simulateBowRelease(model, I, opts) {
   const torqueAt = (tt, qq, ww) => {
     const decay = Math.exp(-tt / RELEASE_TAU_S);
     let tau = scale(opts.torque0, decay);
+    if (opts.extraTorque) tau = add(tau, opts.extraTorque(tt));
     const rv = rotationVector(qq);
     if (opts.free) {
       // 拘束なし

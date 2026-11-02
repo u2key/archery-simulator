@@ -313,6 +313,12 @@
           <div>蓄積エネルギー E = ½·F·(L−BH) = {{ fmt(info.energy) }} J</div>
           <div>初速 v₀ = {{ fmt(info.v0) }} m/s ({{ fmt(info.v0 / 0.3048, 0) }} fps)</div>
           <div class="mt-1">ボウ総質量 {{ fmt(info.bowMass, 2) }} kg</div>
+          <div class="text-slate-200 mt-2 mb-1">リムの振動 (矢が離れた後)</div>
+          <div>固有振動数 {{ fmt(info.vib.freq) }} Hz / 減衰比 ζ {{ fmt(info.vib.zeta, 3) }}</div>
+          <div>振動エネルギー {{ fmt(info.vib.energy, 2) }} J (矢に渡らなかった {{ fmt(info.vib.residual, 1) }} J の一部)</div>
+          <div>先端の振幅 上 ±{{ fmt(info.vib.ampTop * 1000) }} / 下 ±{{ fmt(info.vib.ampBottom * 1000) }} mm</div>
+          <div :class="info.vib.decayTime > 0.3 ? 'text-amber-300' : ''">1/20 に収まるまで {{ fmt(info.vib.decayTime * 1000, 0) }} ms / ハンドルのピーク {{ fmt(info.vib.handPeakG, 2) }} G</div>
+          <div class="text-[11px] text-slate-500">軽い矢ほど大きく、リムダンパー・スタビのダンパーで早く収まる。上下の振幅差 (ティラー) はフォロースルーを揺する</div>
         </div>
       </div>
 

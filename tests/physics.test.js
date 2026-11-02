@@ -340,3 +340,33 @@ test('雨: 発射方向に雨のばらつきが加わる (雨なしの結果は�
   assert.equal(a.dx, b.dx);
   assert.equal(b.parts.rain, undefined);
 });
+
+test('リムの振動: 軽い矢ほど大きく、リムダンパーで早く収まり、矢が離れるまでは影響しない', async () => {
+  const { limbVibration, limbDisplacement } = await import('../src/physics/limb.js');
+  const s = defaultSetup();
+  const prep = prepare(s);
+  const v = prep.vib;
+  assert.ok(v.freq > 10 && v.freq < 80, `freq ${v.freq}`);
+  assert.ok(v.ampTop > 0.003 && v.ampTop < 0.05, `amp ${v.ampTop}`);
+  const light = limbVibration(s.bow, s.stabilizer, prep.drawIn, prep.arrow.mass * 0.6, prep.model.mass);
+  assert.ok(light.energy > v.energy, '軽い矢');
+  const damped = defaultSetup();
+  damped.stabilizer.limbDampers = true;
+  const vd = limbVibration(damped.bow, damped.stabilizer, prep.drawIn, prep.arrow.mass, prep.model.mass);
+  assert.ok(vd.decayTime < v.decayTime * 0.6, 'リムダンパー');
+  // 減衰振動: 1/20 に減衰するまでの時刻以降は包絡線が 5% 以下
+  const t = v.decayTime + 1e-3;
+  assert.ok(Math.abs(limbDisplacement(v, t, v.ampTop)) <= 0.05 * v.ampTop + 1e-12);
+  assert.equal(limbDisplacement(v, -0.01, v.ampTop), 0);
+  // 矢の飛び方 (矢が離れる瞬間のボウの傾き) は振動の有無で変わらない。その後のフォロースルーには効く
+  const { vibrationTorque } = await import('../src/physics/limb.js');
+  const tExit = 0.015;
+  const run = (withVib) => simulateBowRelease(prep.model, prep.I, {
+    torque0: [3, 1, 0], cDamp: prep.cDamp, duration: 0.2, probeTime: tExit,
+    extraTorque: withVib ? (t) => [vibrationTorque(v, t - tExit), 0, 0] : undefined,
+  });
+  const r0 = run(false), r1 = run(true);
+  assert.deepEqual(r1.probe.rv, r0.probe.rv);
+  assert.ok(Math.abs(v.torqueAmp) > 0, 'ティラー差 (既定 4mm) があればピッチトルク');
+  assert.notDeepEqual(r1.final.q, r0.final.q);
+});

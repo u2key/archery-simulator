@@ -65,6 +65,8 @@ src/physics/
   config.js             既定セットアップと材質・ベインの係数表
   bow.js                3.1 引き尺 / 4.1 初速 / 4.2 慣性テンソル・リリース後の回転 (RK4 + クォータニオン)
   arrow.js              3.4 質量分布・FOC・EI・空力係数 / 4.3 パラドックス
+  limb.js               リムの振動 (矢が離れた後の 1 次曲げモードの減衰振動・ハンドルへのトルク)
+  weather.js            天候のタイムライン (晴れ・くもり・雨・雷雨と避難の期限)
   ballistics.js         4.4 弾道 (RK4: 位置・速度・矢の軸・首振り・自転)
   wind.js, simplex.js   4.5 べき乗則の風 + 4D Simplex 乱流
   sight.js              5 サイト調整

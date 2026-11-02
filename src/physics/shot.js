@@ -7,6 +7,7 @@ import {
   drawLengthIn, effectiveLbs, launchSpeed, bowMassModel, inertiaTensor, dampingCoefficient, simulateBowRelease, HAND_INERTIA,
 } from './bow.js';
 import { arrowProperties } from './arrow.js';
+import { limbVibration, vibrationTorque } from './limb.js';
 import { simulateFlight } from './ballistics.js';
 import { calmWind } from './wind.js';
 import { aimAngles, applyCorrection, EYE_ABOVE_ARROW } from './sight.js';
@@ -48,6 +49,7 @@ export function prepare(setup) {
   };
   return {
     drawIn, lbs, arrow, model, I, cDamp, v0, hArrow, eye, eyeElev, swaySigma, D, lineZ,
+    vib: limbVibration(setup.bow, setup.stabilizer, drawIn, arrow.mass, model.mass),
     face: faceDiameterCm(setup.environment.distance),
     swayNoise: createNoise4D(setup.environment.seed + 101),
   };
@@ -106,8 +108,11 @@ export function shoot(setup, prep, o = {}) {
     F * bow.plungerOffsetMm * 3e-4 + N(ts),
     N(0.3 * ts),
   ];
+  // リムの振動: 矢が離れた瞬間 (tExit) から始まり、上下の振幅差がハンドルを揺する
+  const limbVib = limbVibration(bow, setup.stabilizer, drawIn, arrow.mass, prep.model.mass);
   const motion = simulateBowRelease(prep.model, prep.I, {
     torque0, cDamp: prep.cDamp, duration: o.bowMotion ? 1.6 : tExit + 0.001, probeTime: tExit, sampleEvery: 1 / 60,
+    extraTorque: (t) => [vibrationTorque(limbVib, t - tExit), 0, 0],
   });
   const rv = motion.probe.rv;
 
@@ -142,7 +147,7 @@ export function shoot(setup, prep, o = {}) {
   const score = flight.reached ? scoreArrow(Math.hypot(dx, dy), prep.face, arrow.r) : { value: 0, label: 'M', x: false };
 
   return {
-    v0, drawIn, tExit, elev, azim, parts, torque0,
+    v0, drawIn, tExit, elev, azim, parts, torque0, limbVib,
     flight, dx, dy, score,
     bowMotion: o.bowMotion ? motion.samples : null,
     impactSpeed: flight.reached ? Math.hypot(...flight.impact.v) : 0,

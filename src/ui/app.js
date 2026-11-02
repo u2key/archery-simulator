@@ -184,7 +184,7 @@ const App = {
         arrowG: a.mass * 1000, foc: a.foc * 100, f: a.fSpine, EI: a.EI, req: a.requiredSpine, dyn: a.dynamicSpine,
         mismatch: a.mismatch, eff: a.effMismatch, cd: a.cd, A0: a.paradox.A0 * 1000, gamma: a.paradox.gamma,
         I: prep.I, cDamp: prep.cDamp, bowMass: prep.model.mass, cg: prep.model.cg, warnings: a.warnings, stable: a.stable,
-        face: prep.face,
+        face: prep.face, vib: prep.vib,
       };
       const ideal = shoot(s, prep, { noise: false });
       predicted = ideal.flight.reached ? { x: ideal.dx, y: ideal.dy } : null;
@@ -582,6 +582,7 @@ const App = {
           const idx = Math.min(r.bowMotion.length - 1, Math.floor(t * 60));
           scene.setBowAttitude(r.bowMotion[idx].q);
         }
+        scene.setLimbVibration(t - r.tExit, r.limbVib, ui.exaggerate);
         if (landed && !r.recorded) {
           r.recorded = true;
           recordShot(r);

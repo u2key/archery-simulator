@@ -6,6 +6,7 @@ import { paradoxDeflection } from '../physics/arrow.js';
 import { TARGET_CENTER_HEIGHT } from '../physics/scoring.js';
 import { INCH } from '../physics/units.js';
 import { WEATHER } from '../physics/weather.js';
+import { limbDisplacement } from '../physics/limb.js';
 
 const PARTICLES = 1400;
 const RAIN_DROPS = 2600;
@@ -295,10 +296,17 @@ export class RangeScene {
       new THREE.Vector3(0, 0.3 * sgn, 0.01), new THREE.Vector3(0, 0.55 * sgn, -0.045),
       new THREE.Vector3(0, 0.78 * sgn, -0.07), new THREE.Vector3(0, 0.845 * sgn, -0.035),
     ]);
+    // リムは頂点を直接動かして曲げる (付け根 0 → 先端 1 の 2 乗で前後にずらす = 片持ち梁の 1 次モードの近似)
+    this.limbs = [];
     for (const sgn of [1, -1]) {
-      const limb = new THREE.Mesh(new THREE.TubeGeometry(limbCurve(sgn), 24, 0.012, 8), limbMat);
+      const geo = new THREE.TubeGeometry(limbCurve(sgn), 24, 0.012, 8);
+      const limb = new THREE.Mesh(geo, limbMat);
       limb.castShadow = true;
       bowGroup.add(limb);
+      const base = geo.attributes.position.array.slice();
+      const w = new Float32Array(base.length / 3);
+      for (let i = 0; i < w.length; i++) w[i] = Math.min(1, Math.max(0, (Math.abs(base[i * 3 + 1]) - 0.3) / 0.545)) ** 2;
+      this.limbs.push({ geo, base, w, sgn });
     }
     this.tipTop = [0, 0.84, -0.04];
     this.tipBottom = [0, -0.84, -0.04];
@@ -362,11 +370,46 @@ export class RangeScene {
     const brace = this.setup.bow.braceIn * INCH;
     const draw = this.prep.drawIn * INCH;
     const z = -(brace + (draw - brace) * f);
+    // 引くとリムの先端が射手側 (−z) へしなる
+    const bend = -(this.prep.vib?.tipTravel ?? 0) * f;
+    this.applyLimbs(bend, bend);
     const p = this.string.geometry.attributes.position;
     p.setXYZ(1, 0, GRIP_BELOW_ARROW, z);
     p.needsUpdate = true;
     this.stringZ = z;
     this.poseArcher();
+  }
+
+  /** リム先端の前後の変位 [m] (前 = +) を反映し、弦の両端も先端に合わせる */
+  applyLimbs(dTop, dBottom) {
+    if (!this.limbs) return;
+    for (const limb of this.limbs) {
+      const d = limb.sgn > 0 ? dTop : dBottom;
+      const pos = limb.geo.attributes.position;
+      const a = pos.array;
+      for (let i = 0; i < limb.w.length; i++) a[i * 3 + 2] = limb.base[i * 3 + 2] + d * limb.w[i];
+      pos.needsUpdate = true;
+    }
+    const p = this.string.geometry.attributes.position;
+    p.setXYZ(0, this.tipTop[0], this.tipTop[1], this.tipTop[2] + dTop);
+    p.setXYZ(2, this.tipBottom[0], this.tipBottom[1], this.tipBottom[2] + dBottom);
+    p.needsUpdate = true;
+  }
+
+  /**
+   * 矢が離れてから t 秒後のリムと弦の振動 (limb.js のモデル)。exaggerate で見た目だけ誇張する
+   * @param {number} t
+   * @param {object} vib  limbVibration() の結果
+   */
+  setLimbVibration(t, vib, exaggerate = 1) {
+    if (!vib || !this.string || t <= 0) return;
+    this.applyLimbs(limbDisplacement(vib, t, vib.ampTop) * exaggerate, limbDisplacement(vib, t, vib.ampBottom) * exaggerate);
+    // 弦はブレース位置を中心に前後に震える (リムより速く減衰する)
+    const sv = vib.string;
+    const zs = sv.amp * Math.exp(-sv.zeta * sv.omega * t) * Math.sin(sv.omega * t) * exaggerate;
+    const p = this.string.geometry.attributes.position;
+    p.setXYZ(1, 0, GRIP_BELOW_ARROW, -this.setup.bow.braceIn * INCH + zs);
+    p.needsUpdate = true;
   }
 
   /**
@@ -526,7 +569,7 @@ export class RangeScene {
   resetBow() {
     this.bowGroup.quaternion.identity();
     this.released = false;
-    this.poseArcher();
+    this.setDraw(0);
   }
 
   clearStuck() {
