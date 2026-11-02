@@ -4,7 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "start": "node server/index.js",
     "test": "node --test tests/*.test.js",
     "serve": "python3 -m http.server 8000"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
   }
 }
