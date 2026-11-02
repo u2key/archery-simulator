@@ -122,6 +122,8 @@ export class RangeScene {
     this.camera = new THREE.PerspectiveCamera(50, 1, 0.03, 600);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
+    // 左ボタンは「引く」に使うので、視点の回転は右ドラッグ・平行移動は中ドラッグにする
+    this.controls.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE };
     this.controls.target.set(0, 1.3, 2);
     this.mode = 'third';
     this.fovFirst = 10;

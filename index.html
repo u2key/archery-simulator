@@ -90,6 +90,11 @@
           <div class="h-full transition-[width] duration-75" :class="ui.clicked ? 'bg-emerald-400' : 'bg-amber-400'" :style="{ width: (ui.phase === 'aiming' ? ui.clicker * 100 : 0) + '%' }"></div>
         </div>
         <div class="mt-1 text-slate-400">クリッカー {{ ui.clicked ? '切れた — 離す!' : '' }}</div>
+        <div class="mt-1 text-[11px] text-slate-500 leading-4">
+          左ボタン長押しで引く → マウスで狙う → 離して放つ (Space・矢印キーも可)<br>
+          <span v-if="ui.pad" class="text-emerald-400">🎮 RT/A で引く・左スティックで狙う・B で避難</span>
+          <span v-else>右ドラッグで視点を回転 / ゲームパッドはボタンを押すと認識</span>
+        </div>
       </div>
       <div v-if="last" class="pointer-events-none absolute left-3 top-3 rounded bg-slate-950/75 px-3 py-2 text-xs tabular leading-5">
         <div class="text-lg font-semibold">{{ last.score }} <span class="text-xs font-normal text-slate-400">E{{ last.end }}-{{ last.shot }} {{ last.note }}</span></div>
@@ -468,6 +473,9 @@
           </div>
           <div v-else class="text-xs text-slate-500">3本以上射つと補正案を表示します</div>
           <label class="flex items-center gap-2 text-xs text-slate-300"><input type="checkbox" v-model="ui.autoCorrect"> 自動射撃・一括計算ではエンドごとに自動補正</label>
+          <div class="pt-2 text-xs text-slate-400">エイム操作</div>
+          <num-field label="マウス感度" unit="mrad/px" v-model="ui.mouseSens" :step="0.005" :min="0.005" :max="0.3" hint="マウス 1px で照準が動く角度"></num-field>
+          <num-field label="スティック・矢印キー速度" unit="mrad/s" v-model="ui.padSens" :step="1" :min="1" :max="40" hint="倒しきったときの照準の速さ"></num-field>
         </div>
         <div class="text-xs text-slate-400 leading-5">
           <div class="text-slate-200 mb-1">「当たった方向に合わせる」</div>

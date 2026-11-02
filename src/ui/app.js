@@ -8,7 +8,8 @@ import { createRng } from '../physics/random.js';
 import { storedEnergy } from '../physics/bow.js';
 import { createScoreCard, addArrow, summary, isComplete, ENDS, ARROWS_PER_END } from '../physics/scoring.js';
 import { applyCorrection, correctionMm, groupCenter } from '../physics/sight.js';
-import { toDeg } from '../physics/units.js';
+import { toDeg, MRAD } from '../physics/units.js';
+import { createAimInput } from './input.js';
 import { connectMatchServer } from './net.js';
 import { WEATHER, WeatherTimeline, phaseAt } from '../physics/weather.js';
 
@@ -114,6 +115,8 @@ const App = {
       // 天候: 表示用。phase は null | 'approach' (遠雷) | 'storm' (雷雲到来・射撃中止)
       weather: { kind: 'clear', look: 'clear', label: '晴れ', icon: '☀', rain: 0, visibility: 1, phase: null, countdown: 0, endIn: 0 },
       practiceSheltered: false,
+      // 手動エイム: マウス感度 [mrad/px]、スティック・矢印キーの最大速度 [mrad/s]
+      mouseSens: 0.04, padSens: 10, pad: '',
     });
     const card = ref(createScoreCard());
     const impacts = ref([]);
@@ -126,6 +129,8 @@ const App = {
     let predicted = null;   // 今のサイト設定で無風・理想射したときの着弾 [m]
     let simTime = 0, tPhase = 0, tClick = 2, pendingResult = null;
     let currentSway = { elev: 0, azim: 0 };
+    let currentAim = { elev: 0, azim: 0 };   // 照準 (自分で合わせた位置 + 手ブレ・心拍)
+    let input = null;
 
     const sheet = computed(() => summary(card.value));
     const shotsInEnd = computed(() => {
@@ -266,11 +271,13 @@ const App = {
       }
     }
 
+    /** 引いている矢を戻す (放さずに引き戻す) */
     function cancelDraw() {
       if (ui.phase === 'drawing' || ui.phase === 'aiming') {
         ui.phase = 'idle';
         scene?.setDraw(0);
       }
+      input?.unlock();
     }
 
     function evacuate() {
@@ -428,6 +435,12 @@ const App = {
     function startDraw() {
       if (ui.phase !== 'idle' || shootBlocked.value) return;
       if (shotsInEnd.value === 0) scene.clearStuck();
+      // 手動エイム: 弓を上から下ろしてくるので、照準は的の少し上・左右どちらかから始まる
+      if (ui.autoEnd) input?.reset(0, 0);
+      else {
+        input?.reset((4 + 4 * Math.random()) * MRAD, (Math.random() * 2 - 1) * 3 * MRAD);
+        input?.lock();
+      }
       ui.phase = 'drawing';
       tPhase = 0;
       ui.clicked = false;
@@ -444,6 +457,7 @@ const App = {
 
     function release() {
       if (ui.phase !== 'aiming') return;
+      input?.unlock();
       const late = tPhase - tClick;
       let drawDeltaIn = 0, note = 'クリッカーで発射';
       if (!ui.clicked) {
@@ -453,7 +467,8 @@ const App = {
         drawDeltaIn = -Math.min(0.12, (late - 1.0) * 0.04);
         note = 'クリッカー後に保持しすぎ (戻り)';
       }
-      const result = shoot(toRaw(setup), prep, { rng, wind, time: simTime, bowMotion: true, sway: { ...currentSway }, drawDeltaIn, rain: ui.weather.rain });
+      // 発射方向のずれ = 自分で合わせた照準 + その瞬間の手ブレ
+      const result = shoot(toRaw(setup), prep, { rng, wind, time: simTime, bowMotion: true, sway: { ...currentAim }, drawDeltaIn, rain: ui.weather.rain });
       result.note = note;
       pendingResult = result;
       scene.launch(result, shotsInEnd.value);
@@ -542,6 +557,7 @@ const App = {
       lastFrame = now;
       simTime += dt;
       tPhase += dt;
+      input?.update(dt);
       scene.updateWind(wind, simTime, dt);
 
       if (ui.phase === 'drawing') {
@@ -584,11 +600,16 @@ const App = {
       const base = aimSway(toRaw(setup), prep, simTime);
       const k = swayFactor();
       currentSway = { elev: base.elev * k, azim: base.azim * k };
-      scene.render(currentSway);
+      const holding = ui.phase === 'drawing' || ui.phase === 'aiming';
+      currentAim = holding && input
+        ? { elev: input.aim.elev + currentSway.elev, azim: input.aim.azim + currentSway.azim }
+        : currentSway;
+      scene.render(currentAim);
 
       if (now - lastUi > 100) {
         lastUi = now;
         updateWeather();
+        ui.pad = input?.state.padName ?? '';
         const w = wind.at(0, 2, 0, simTime);
         ui.wind = { speed: Math.hypot(w[0], w[2]), dir: (toDeg(Math.atan2(w[0], w[2])) + 360) % 360, x: w[0], z: w[2] };
         paintPip();
@@ -599,7 +620,7 @@ const App = {
     function paintPip() {
       if (!pip.value || !prep) return;
       const D = prep.D - prep.eye[2];   // 目から的までの距離
-      const aim = ui.phase === 'aiming' || ui.phase === 'drawing' ? { x: Math.tan(currentSway.azim) * D, y: Math.tan(currentSway.elev) * D } : null;
+      const aim = ui.phase === 'aiming' || ui.phase === 'drawing' ? { x: Math.tan(currentAim.azim) * D, y: Math.tan(currentAim.elev) * D } : null;
       // サイトの映り込み: 引いていない間はピンを的の中心に置いた状態で見せる
       const r = setup.sight.radiusM;
       const sight = ui.showSight ? {
@@ -618,6 +639,18 @@ const App = {
       rebuild(false);
       scene.setMode(ui.mode);
       window.addEventListener('keydown', onKey);
+      input = createAimInput({
+        element: scene.renderer.domElement,
+        canAim: () => (ui.phase === 'drawing' || ui.phase === 'aiming') && !ui.autoEnd,
+        onPress: () => { if (ui.phase === 'idle') startDraw(); },
+        onRelease: () => {
+          if (ui.phase === 'aiming') release();
+          else if (ui.phase === 'drawing' && !ui.autoEnd) cancelDraw();
+        },
+        onEvacuate: evacuate,
+        onNudge: (axis, mm) => { if (ui.phase === 'idle') nudge(axis, mm); },
+        settings: ui,
+      });
       net = connectMatchServer({
         onStatus: (st) => { online.status = st; },
         onState: onServerState,
@@ -628,6 +661,7 @@ const App = {
         setup, ui, card, impacts, release, startDraw, simulateRest, online, startMatch, evacuate, scene: () => scene,
         practiceStorm: () => practiceWeather.startStorm(Date.now()),
         serverStorm: () => net?.send({ type: 'debugStorm' }),
+        aim: () => ({ ...input?.aim }),
       };
       requestAnimationFrame(frame);
     });
