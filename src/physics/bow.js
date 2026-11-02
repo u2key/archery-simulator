@@ -37,7 +37,7 @@ export function launchSpeed(bow, drawIn, arrowMassKg, restLoss = 0) {
 
 const SPACER_G_PER_IN = 14;   // スペーサー (ステンレス) の線密度
 const DAMPER_G = 25;
-const VBAR_MOUNT = [0, -0.085, 0.045];
+const RISER_MOUNT = [0, -0.085, 0.045];   // ライザー前面のスタビライザー取付穴
 
 function segment(points, a, b, mass, n) {
   for (let i = 0; i < n; i++) {
@@ -53,7 +53,18 @@ function rod(points, parts, name, origin, dir, rodCfg, stab) {
   segment(points, origin, tip, rodMass, 8);
   if (rodCfg.damper) points.push({ m: DAMPER_G / 1000, r: add(origin, scale(dir, len * 0.92)) });
   points.push({ m: rodCfg.tipOz * OZ, r: tip });
-  parts.push({ name, from: origin, to: tip, tipOz: rodCfg.tipOz, damper: rodCfg.damper });
+  parts.push({ name, kind: 'rod', from: origin, to: tip, tipOz: rodCfg.tipOz, damper: rodCfg.damper });
+}
+
+// センターロッドの取付方向 (下向きに angleDeg)
+function centerDirection(c) {
+  const a = deg(c.angleDeg);
+  return [0, -Math.sin(a), Math.cos(a)];
+}
+
+// Vバーの位置: ライザーからエクステンダー分だけ前に出た所 (一般的には 10cm 前後)
+export function vbarPosition(stab) {
+  return add(RISER_MOUNT, scale(centerDirection(stab.center), (stab.extenderIn ?? 0) * INCH));
 }
 
 export function sideRodDirection(side, sign) {
@@ -69,16 +80,22 @@ export function bowMassModel(bow, stab) {
   segment(points, [0, -0.3, 0.01], [0, -0.84, -0.06], bow.limbMassG / 1000, 6);
   points.push({ m: bow.sightMassG / 1000, r: [-0.035, 0.13, 0.25] });
 
+  // ライザー → エクステンダー → Vバー → センターロッド / サイドロッド
   const c = stab.center;
-  if (c.lengthIn > 0) {
-    const a = deg(c.angleDeg);
-    rod(points, parts, 'center', VBAR_MOUNT, [0, -Math.sin(a), Math.cos(a)], c, stab);
+  const hasCenter = c.lengthIn > 0, hasSide = stab.side.count > 0;
+  const vbar = vbarPosition(stab);
+  const extIn = hasCenter || hasSide ? (stab.extenderIn ?? 0) : 0;
+  if (extIn > 0) {
+    segment(points, RISER_MOUNT, vbar, (stab.rodGPerIn * extIn) / 1000, 3);
+    parts.push({ name: 'extender', kind: 'extender', from: RISER_MOUNT, to: vbar, tipOz: 0, damper: false });
   }
-  if (stab.side.count > 0) {
-    points.push({ m: stab.vbarMassG / 1000, r: add(VBAR_MOUNT, [0, 0, -0.02]) });
+  if (hasCenter) rod(points, parts, 'center', vbar, centerDirection(c), c, stab);
+  if (hasSide) {
+    points.push({ m: stab.vbarMassG / 1000, r: vbar });
+    parts.push({ name: 'vbar', kind: 'vbar', from: vbar, to: vbar, tipOz: 0, damper: false });
     const signs = stab.side.count >= 2 ? [-1, 1] : [1];
     for (const sgn of signs) {
-      rod(points, parts, sgn < 0 ? 'sideL' : 'sideR', add(VBAR_MOUNT, [0, 0, -0.02]), sideRodDirection(stab.side, sgn), stab.side, stab);
+      rod(points, parts, sgn < 0 ? 'sideL' : 'sideR', vbar, sideRodDirection(stab.side, sgn), stab.side, stab);
     }
   }
 

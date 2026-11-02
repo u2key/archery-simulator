@@ -13,7 +13,7 @@ import { aimAngles, applyCorrection, EYE_ABOVE_ARROW } from './sight.js';
 import { scoreArrow, faceDiameterCm, TARGET_CENTER_HEIGHT } from './scoring.js';
 
 // 揺れの基準とする慣性モーメント (既定セットアップの値) [kg·m²]
-const I_REF = { pitch: 0.286, yaw: 0.125 };
+const I_REF = { pitch: 0.308, yaw: 0.145 };
 const SWAY_MRAD = 0.85;          // skill=1, I=I_REF での照準揺れ (各軸の標準偏差)
 const HEARTBEAT_MRAD = 0.12;     // 心拍による揺れの振幅 (72 bpm 時)
 const RELEASE_TORQUE_SIGMA = 3.0;  // リリース時の手のトルクのばらつき [N·m] (skill=1)

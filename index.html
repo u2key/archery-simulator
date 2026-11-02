@@ -212,6 +212,7 @@
           <label class="flex items-center gap-2 py-0.5 text-[13px] text-slate-300"><input type="checkbox" v-model="setup.stabilizer.side.damper"> ダンパー</label>
         </div>
         <div>
+          <num-field label="エクステンダー (ライザー〜Vバー)" unit="inch" v-model="setup.stabilizer.extenderIn" :step="0.5" :min="0" :max="10"></num-field>
           <num-field label="Vバー質量" unit="g" v-model="setup.stabilizer.vbarMassG" :step="5"></num-field>
           <num-field label="ロッド線密度" unit="g/in" v-model="setup.stabilizer.rodGPerIn" :step="0.5"></num-field>
         </div>

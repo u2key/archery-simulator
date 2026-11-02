@@ -53,6 +53,7 @@ export function defaultSetup() {
     stabilizer: {
       center: { lengthIn: 30, angleDeg: 5, tipOz: 3, spacerIn: 0, damper: true },
       side: { count: 2, lengthIn: 12, spreadDeg: 40, dropDeg: 25, tipOz: 6, spacerIn: 0, damper: false },
+      extenderIn: 4,       // ライザー〜Vバー間のエクステンダー長 (4" ≈ 10cm)
       vbarMassG: 70,
       rodGPerIn: 3.5,      // ロッド自体の線密度 [g/inch]
     },

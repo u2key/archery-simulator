@@ -285,3 +285,15 @@ test('統合: 既定設定の中級者は 18m で平均 8.5〜9.6 点程度', ()
   const avg = total / 120;
   assert.ok(avg > 8.5 && avg < 9.6, `avg ${avg}`);
 });
+
+test('3.3 Vバーはエクステンダーでライザーから約10cm前に出し、サイドロッドはそこから出る', () => {
+  const s = defaultSetup();
+  const model = bowMassModel(s.bow, s.stabilizer);
+  const vbar = model.parts.find((p) => p.name === 'vbar').from;
+  const ext = model.parts.find((p) => p.name === 'extender');
+  const len = Math.hypot(...ext.to.map((v, i) => v - ext.from[i]));
+  close(len, 0.1016, 1e-6, 'extender length');
+  for (const name of ['center', 'sideL', 'sideR']) {
+    assert.deepEqual(model.parts.find((p) => p.name === name).from, vbar, name);
+  }
+});
