@@ -37,6 +37,12 @@ export function launchSpeed(bow, drawIn, arrowMassKg, restLoss = 0) {
 
 const SPACER_G_PER_IN = 14;   // スペーサー (ステンレス) の線密度
 const DAMPER_G = 25;
+// リム付け根: ライザー上下端の前面 (的側) のブッシングと、リムの腹 (射手側) に当てるリムダンパー
+const LIMB_ROOT_MOUNT_Y = 0.255;
+const LIMB_ROOT_MOUNT_Z = 0.036;
+const LIMB_DAMPER_G = 12;
+const LIMB_DAMPER_AT = [0, 0.345, -0.03];   // 上側 (下側は y を反転)。リムの付け根の少し先の腹に当たる
+export const LIMB_ROOT_POSITIONS = { none: [], top: [1], bottom: [-1], both: [1, -1] };
 const RISER_MOUNT = [0, -0.085, 0.045];   // ライザー前面のスタビライザー取付穴
 
 function segment(points, a, b, mass, n) {
@@ -99,6 +105,23 @@ export function bowMassModel(bow, stab) {
     }
   }
 
+  // リム付け根のスタビ: 前 (的方向) へ出し、angleDeg だけ外側 (上は上向き、下は下向き) へ振る
+  const lr = stab.limbRoot;
+  if (lr && lr.lengthIn > 0) {
+    for (const sgn of LIMB_ROOT_POSITIONS[lr.position] ?? []) {
+      const a = deg(lr.angleDeg);
+      const origin = [0, sgn * LIMB_ROOT_MOUNT_Y, LIMB_ROOT_MOUNT_Z];
+      rod(points, parts, sgn > 0 ? 'limbTop' : 'limbBottom', origin, [0, sgn * Math.sin(a), Math.cos(a)], { ...lr, spacerIn: 0 }, stab);
+    }
+  }
+  if (stab.limbDampers) {
+    for (const sgn of [1, -1]) {
+      const at = [LIMB_DAMPER_AT[0], sgn * LIMB_DAMPER_AT[1], LIMB_DAMPER_AT[2]];
+      points.push({ m: LIMB_DAMPER_G / 1000, r: at });
+      parts.push({ name: sgn > 0 ? 'limbDamperTop' : 'limbDamperBottom', kind: 'limbDamper', from: [0, sgn * 0.27, -0.016], to: at, tipOz: 0, damper: true });
+    }
+  }
+
   const mass = points.reduce((s, p) => s + p.m, 0);
   const cg = scale(points.reduce((s, p) => add(s, scale(p.r, p.m)), [0, 0, 0]), 1 / mass);
   return { points, parts, mass, cg };
@@ -126,6 +149,11 @@ export function dampingCoefficient(stab) {
   let c = 0.4;
   if (stab.center.lengthIn > 0 && stab.center.damper) c += 0.8;
   if (stab.side.damper) c += 0.8 * stab.side.count;
+  // リム付け根は回転軸 (グリップ) に近いので、ダンパー 1 個あたりの効きはロッドの半分程度
+  const lr = stab.limbRoot;
+  if (lr && lr.lengthIn > 0 && lr.damper) c += 0.4 * (LIMB_ROOT_POSITIONS[lr.position] ?? []).length;
+  // リムダンパーはリムの振動を吸収し、その分ハンドルへ伝わる揺れが早く収まる
+  if (stab.limbDampers) c += 0.3;
   return c;
 }
 

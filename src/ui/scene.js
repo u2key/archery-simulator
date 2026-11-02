@@ -300,6 +300,16 @@ export class RangeScene {
         bowGroup.add(block);
         continue;
       }
+      if (part.kind === 'limbDamper') {
+        // ライザー端からリムの腹へ伸びる短い支柱と、リムに当たるゴムの頭
+        bowGroup.add(cylinderBetween(part.from, part.to, 0.005, rodMat));
+        const head = new THREE.Mesh(new THREE.SphereGeometry(0.014, 14, 10), damperMat);
+        head.position.copy(v3(part.to));
+        head.scale.set(1, 0.75, 1);
+        head.castShadow = true;
+        bowGroup.add(head);
+        continue;
+      }
       if (part.kind === 'extender') {
         bowGroup.add(cylinderBetween(part.from, part.to, 0.0095, rodMat));
         continue;

@@ -304,3 +304,22 @@ test('射距離はシューティングラインから測る: ボウから的ま
   assert.ok(prep.lineZ < prep.eye[2]);
   close(prep.D - prep.lineZ, s.environment.distance, 1e-9, 'line to target');
 });
+
+test('3.3 リム付け根のスタビとリムダンパー: 慣性モーメントと減衰が増える', () => {
+  const base = defaultSetup();
+  const I0 = inertiaTensor(bowMassModel(base.bow, base.stabilizer).points);
+  const c0 = dampingCoefficient(base.stabilizer);
+  const s = defaultSetup();
+  s.stabilizer.limbRoot = { position: 'both', lengthIn: 4, angleDeg: 0, tipOz: 2, damper: true };
+  s.stabilizer.limbDampers = true;
+  const model = bowMassModel(s.bow, s.stabilizer);
+  const I = inertiaTensor(model.points);
+  assert.ok(I[0][0] > I0[0][0], 'ピッチ');
+  assert.ok(I[1][1] > I0[1][1], 'ヨー');
+  close(dampingCoefficient(s.stabilizer) - c0, 0.4 * 2 + 0.3, 1e-12, 'damping');
+  for (const n of ['limbTop', 'limbBottom', 'limbDamperTop', 'limbDamperBottom']) assert.ok(model.parts.some((p) => p.name === n), n);
+  // 上だけなら 1 本
+  s.stabilizer.limbRoot.position = 'top';
+  const parts = bowMassModel(s.bow, s.stabilizer).parts;
+  assert.ok(parts.some((p) => p.name === 'limbTop') && !parts.some((p) => p.name === 'limbBottom'));
+});
