@@ -26,28 +26,59 @@ function cylinderBetween(a, b, radius, material) {
   return mesh;
 }
 
-/** a → b をつなぐ先細りの円柱 (体の各部位)。update() で毎フレーム動かせる */
-function makeBone(rA, rB, material) {
-  const geo = new THREE.CylinderGeometry(rB, rA, 1, 14);
+/**
+ * a → b をつなぐ角柱 (マイクラ風の体の各部位)。断面は w (局所 x) × d (局所 z)。
+ * update(a, b, ref) で毎フレーム動かせる。ref は局所 x を向けたい方向 (ねじれ止め)、ext は両端の伸ばし量。
+ */
+function makeBlock(w, d, material, ext = 0) {
+  const geo = new THREE.BoxGeometry(w, 1, d);
   geo.translate(0, 0.5, 0);
   const mesh = new THREE.Mesh(geo, material);
   mesh.castShadow = true;
-  mesh.update = (a, b) => {
-    const d = b.clone().sub(a);
-    mesh.position.copy(a);
-    mesh.scale.set(1, Math.max(d.length(), 1e-4), 1);
-    mesh.quaternion.setFromUnitVectors(Y_UP, d.normalize());
+  const basis = new THREE.Matrix4();
+  mesh.update = (a, b, ref = new THREE.Vector3(1, 0, 0)) => {
+    const y = b.clone().sub(a);
+    const len = Math.max(y.length(), 1e-4) + 2 * ext;
+    y.normalize();
+    let x = ref.clone().sub(y.clone().multiplyScalar(ref.dot(y)));
+    if (x.lengthSq() < 1e-6) x = new THREE.Vector3(0, 0, 1).sub(y.clone().multiplyScalar(y.z));
+    x.normalize();
+    const z = x.clone().cross(y);
+    basis.makeBasis(x, y, z);
+    mesh.quaternion.setFromRotationMatrix(basis);
+    mesh.position.copy(a).sub(y.multiplyScalar(ext));
+    mesh.scale.set(1, len, 1);
   };
   return mesh;
 }
 
-/** 半径 1 の球を各軸 sx, sy, sz に伸ばした楕円体 */
-function ellipsoid(sx, sy, sz, material, pos) {
-  const m = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 14), material);
-  m.scale.set(sx, sy, sz);
+/** 中心 pos の直方体 */
+function block(sx, sy, sz, material, pos) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), material);
   if (pos) m.position.copy(pos);
   m.castShadow = true;
   return m;
+}
+
+/**
+ * ドット絵のテクスチャ。rows は 1 文字 = 1 ピクセルの文字列配列、palette は文字 → 色。
+ * NearestFilter で拡大してもドットがにじまないようにする。
+ */
+function pixelMaterial(rows, palette) {
+  const h = rows.length, w = rows[0].length;
+  const cv = document.createElement('canvas');
+  cv.width = w;
+  cv.height = h;
+  const g = cv.getContext('2d');
+  rows.forEach((row, y) => [...row].forEach((ch, x) => {
+    g.fillStyle = palette[ch];
+    g.fillRect(x, y, 1, 1);
+  }));
+  const tex = new THREE.CanvasTexture(cv);
+  tex.magFilter = THREE.NearestFilter;
+  tex.minFilter = THREE.NearestFilter;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return new THREE.MeshLambertMaterial({ map: tex });
 }
 
 /**
@@ -310,124 +341,113 @@ export class RangeScene {
   }
 
   /**
-   * 右利きの射手。シューティングライン (z = lineZ) をまたいで横向きに立ち、胸は +x (射手の右手側) を向く。
-   * 弓手 (左) は的方向へ伸ばしてグリップを握り、右手は弦を引いてあご下にアンカーする。
-   * 体は弦が胸をかすめる程度に矢のラインの左後ろへ置く。寸法は身長から決め、目とアンカーは物理モデルの値に合わせる。
+   * 右利きの射手 (マイクラ風のブロック体型)。シューティングライン (z = lineZ) をまたいで横向きに立ち、
+   * 胸は +x (射手の右手側) を向く。胴と弓手 (左) は的に対して真横を保ち、右腕は体の前を回してあご下にアンカーする。
+   * 寸法は身長から決め、目とアンカーは物理モデルの値に合わせる。
    */
   buildArcher(prep) {
     const g = this.archerGroup;
     g.clear();
     const H = this.setup.player.heightCm / 100;
     const k = H / 1.75;
-    const skin = new THREE.MeshLambertMaterial({ color: '#d7a98c' });
-    const shirt = new THREE.MeshLambertMaterial({ color: '#2f5fa8' });
-    const shirtDark = new THREE.MeshLambertMaterial({ color: '#244a85' });
-    const pants = new THREE.MeshLambertMaterial({ color: '#2a2a33' });
-    const shoe = new THREE.MeshLambertMaterial({ color: '#e8e8e8' });
-    const sole = new THREE.MeshLambertMaterial({ color: '#444' });
-    const hair = new THREE.MeshLambertMaterial({ color: '#2b1d14' });
-    const gear = new THREE.MeshLambertMaterial({ color: '#1d1d1d' });
     const P = (x, y, z) => new THREE.Vector3(x, y, z);
+    const C = {
+      skin: '#c8956e', skinD: '#a8764f', hair: '#3b2614', hairL: '#4f341c', eyeW: '#f2f2f2', eye: '#3b5bb5',
+      mouth: '#7a4632', shirt: '#2fa9b8', shirtD: '#23818d', pants: '#3a3f9e', pantsD: '#2c3080', shoe: '#5b5b5b', gear: '#1e1e1e',
+    };
+    const flat = (c) => new THREE.MeshLambertMaterial({ color: c });
+    const skin = flat(C.skin), shirt = flat(C.shirt), pants = flat(C.pants), shoe = flat(C.shoe), gear = flat(C.gear);
 
     const yA = prep.hArrow;
     const eye = v3(prep.eye);
-    const zLine = prep.lineZ;                 // 両足の中央 = シューティングライン
-    const yShoulder = yA - 0.07;
-    const torso = 0.29 * H;                   // 肩〜股関節
-    const yHip = yShoulder - torso;
-    // 胴は的に対して真横 (肩の線は射線と平行) を保つ。弓手の肩はあごのすぐ横、胸の前面が弦をかすめる位置。
-    // 引き手の肩はその真後ろ (肩幅分)。
-    const xSpine = -0.12 * k;
-    const bowSh = P(xSpine + 0.01, yShoulder, eye.z + 0.04 * k);
-    const sh = { bow: bowSh, draw: bowSh.clone().add(P(0, 0, -0.34 * k)) };
-    const chestC = sh.bow.clone().lerp(sh.draw, 0.5);
-    this.body = { k, H, yA, sh, upper: 0.172 * H, fore: 0.152 * H };
+    const zLine = prep.lineZ;
+    const head = 0.26 * k;                    // 頭は立方体 (胴の幅に近い大きさ)
+    const bodyW = 0.3 * k, bodyD = 0.16 * k;  // 胴の幅 (肩の線 = z 方向) と厚み (x 方向)
+    const limb = 0.1 * k;                     // 腕・脚の太さ
+    const xSpine = -0.1 * k;                  // 胸の前面が矢のライン (x=0) をかすめる位置
+    const yBodyTop = yA + 0.03;               // あご (頭の底) の高さ。アンカーする手はこの下に入る
+    const yHip = yBodyTop - 0.5 * k;
+    const yShoulder = yBodyTop - limb / 2;
+    // 胴は的に対して真横: 肩の線は射線と平行。弓手の肩はあごのすぐ横に来る
+    const bowSh = P(xSpine, yShoulder, eye.z + 0.04 * k);
+    const sh = { bow: bowSh, draw: bowSh.clone().add(P(0, 0, -(bodyW + limb))) };
+    const zBody = (sh.bow.z + sh.draw.z) / 2;
+    this.body = { k, H, yA, sh, upper: 0.3 * k, fore: 0.27 * k };
 
-    // ---- 脚: 肩幅に開き、ラインの前後に1本ずつ ----
-    const stance = 0.2 * k;
-    const legs = [];
-    for (const sgn of [1, -1]) {
-      const hipJ = P(xSpine, yHip, zLine + sgn * 0.09 * k);
-      const ankle = P(xSpine + 0.01, 0.08 * k, zLine + sgn * stance);
-      const L = hipJ.distanceTo(ankle) * 1.01 / 2;
-      const { joint: knee } = solveTwoBone(hipJ, ankle, L, L, P(1, 0, 0));
-      const thigh = makeBone(0.085 * k, 0.06 * k, pants);
-      thigh.update(hipJ, knee);
-      const shin = makeBone(0.058 * k, 0.042 * k, pants);
-      shin.update(knee, ankle);
-      g.add(thigh, shin, ellipsoid(0.06 * k, 0.06 * k, 0.06 * k, pants, knee));
-      // 靴: つま先は胸の向き (+x)。前足 (的側) は少し開く
-      const foot = new THREE.Group();
-      const upperShoe = new THREE.Mesh(new THREE.BoxGeometry(0.26 * k, 0.07 * k, 0.1 * k), shoe);
-      upperShoe.position.set(0.07 * k, 0.045 * k, 0);
-      const soleM = new THREE.Mesh(new THREE.BoxGeometry(0.27 * k, 0.02 * k, 0.105 * k), sole);
-      soleM.position.set(0.07 * k, 0.01, 0);
-      upperShoe.castShadow = soleM.castShadow = true;
-      foot.add(upperShoe, soleM);
-      foot.position.set(ankle.x - 0.02, 0, ankle.z);
-      foot.rotation.y = sgn > 0 ? 0.3 : 0.05;
-      g.add(foot);
-      legs.push(hipJ);
-    }
-
-    // ---- 胴体: 局所座標 (x=胸の正面, z=弓手側) ----
-    const chest = new THREE.Group();
-    chest.position.set(chestC.x, 0, chestC.z);
-    const pelvis = new THREE.Group();
-    pelvis.position.set(xSpine, 0, zLine);
-    pelvis.add(ellipsoid(0.105 * k, 0.11 * k, 0.17 * k, pants, P(0, yHip + 0.04 * k, 0)));            // 骨盤
-    pelvis.add(ellipsoid(0.108 * k, 0.025, 0.155 * k, gear, P(0, yHip + 0.1 * k, 0)));                // ベルト
-    chest.add(ellipsoid(0.1 * k, 0.17 * k, 0.145 * k, shirtDark, P(0, yHip + 0.2 * k, 0)));          // 腹
-    chest.add(ellipsoid(0.115 * k, 0.17 * k, 0.175 * k, shirt, P(0.005, yShoulder - 0.12 * k, 0)));  // 胸
-    chest.add(ellipsoid(0.02, 0.13 * k, 0.1 * k, gear, P(0.1 * k, yShoulder - 0.12 * k, 0.07 * k))); // チェストガード (弓手側の胸)
-    g.add(chest, pelvis);
-    g.add(ellipsoid(0.058 * k, 0.058 * k, 0.058 * k, shirt, sh.bow));
-    // 引き手の肩は弦へ手を伸ばすときに前へ出るので poseArcher で動かす
-    this.drawShoulder = ellipsoid(0.058 * k, 0.058 * k, 0.058 * k, shirt, sh.draw);
-    g.add(this.drawShoulder);
-    // ベルトとクイーバー (引き手側の腰)
-    const qTop = P(xSpine + 0.06, yHip + 0.06, zLine - 0.2 * k), qBot = P(xSpine + 0.1, yHip - 0.32, zLine - 0.12 * k);
-    const quiver = makeBone(0.045, 0.035, gear);
+    // ---- 胴: 前面 (+x) はシャツの襟とベルト ----
+    const shirtFront = pixelMaterial([
+      'ssssssss', 'sSssssSs', 'ssSSSSss', 'ssssssss', 'ssssssss', 'ssssssss', 'ssssssss', 'ssssssss',
+      'ssssssss', 'ssssssss', 'bbbbbbbb', 'pppppppp',
+    ], { s: C.shirt, S: C.shirtD, b: '#4a3520', p: C.pants });
+    const shirtSide = pixelMaterial(['s', 's', 's', 's', 's', 's', 's', 's', 's', 's', 'b', 'p'], { s: C.shirt, b: '#4a3520', p: C.pants });
+    // BoxGeometry の面の順: +x, −x, +y, −y, +z, −z
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(bodyD, yBodyTop - yHip, bodyW),
+      [shirtFront, shirtSide, shirt, pants, shirtSide, shirtSide]);
+    torso.position.set(xSpine, (yBodyTop + yHip) / 2, zBody);
+    torso.castShadow = true;
+    g.add(torso);
+    // チェストガード (弓手側の胸) とクイーバー (引き手側の腰)
+    g.add(block(0.02, 0.16 * k, 0.12 * k, gear, P(xSpine + bodyD / 2 + 0.01, yBodyTop - 0.13 * k, zBody + 0.07 * k)));
+    const quiver = makeBlock(0.08, 0.08, flat('#5a3b1f'));
+    const qBot = P(xSpine + 0.06, yHip - 0.3 * k, zBody - 0.13 * k), qTop = P(xSpine + 0.03, yHip + 0.08, zBody - 0.2 * k);
     quiver.update(qBot, qTop);
     g.add(quiver);
     const qDir = qTop.clone().sub(qBot).normalize();
     for (let i = 0; i < 4; i++) {
-      const fl = makeBone(0.006, 0.006, new THREE.MeshLambertMaterial({ color: SHOT_COLORS[i] }));
-      const off = P(Math.cos(i * 1.7) * 0.02, 0, Math.sin(i * 1.7) * 0.02);
+      const fl = makeBlock(0.018, 0.018, flat(SHOT_COLORS[i]));
+      const off = P((i % 2 ? 1 : -1) * 0.018, 0, (i < 2 ? 1 : -1) * 0.018);
       fl.update(qTop.clone().add(off), qTop.clone().add(off).add(qDir.clone().multiplyScalar(0.07)));
       g.add(fl);
     }
 
-    // ---- 首・頭: 顔は的を向き、右目が矢の真上 (物理の eye) に来る ----
-    const head = P(eye.x - 0.035 * k, eye.y + 0.01, eye.z - 0.075 * k);
-    const neckBase = P(chestC.x + 0.01, yShoulder + 0.03, chestC.z);
-    const neck = makeBone(0.05 * k, 0.045 * k, skin);
-    neck.update(neckBase, head.clone().add(P(0, -0.08 * k, -0.02)));
-    g.add(neck);
-    const headG = new THREE.Group();
-    headG.position.copy(head);
-    headG.add(ellipsoid(0.08 * k, 0.11 * k, 0.095 * k, skin));
-    const hairM = ellipsoid(0.085 * k, 0.09 * k, 0.095 * k, hair, P(0, 0.035 * k, -0.012 * k));
-    headG.add(hairM);
-    headG.add(ellipsoid(0.03 * k, 0.04 * k, 0.03 * k, skin, P(0, -0.075 * k, 0.045 * k)));   // あご
-    headG.add(ellipsoid(0.012 * k, 0.018 * k, 0.02 * k, skin, P(0.01 * k, -0.005, 0.09 * k))); // 鼻
-    for (const sgn of [1, -1]) headG.add(ellipsoid(0.015, 0.025, 0.012, skin, P(sgn * 0.08 * k, 0, -0.005)));  // 耳
-    g.add(headG);
-    this.head = headG;
+    // ---- 脚: ラインの前後に 1 本ずつ (股関節から足首まで 1 本の角柱) ----
+    const stance = 0.2 * k;
+    for (const sgn of [1, -1]) {
+      const hipJ = P(xSpine, yHip + 0.02, zBody + sgn * (bodyW / 2 - limb / 2));
+      const ankle = P(xSpine, 0.07 * k, zLine + sgn * stance);
+      const leg = makeBlock(limb, limb, pants);
+      leg.update(ankle, hipJ);
+      const foot = makeBlock(limb + 0.01, limb + 0.04 * k, shoe);
+      foot.update(P(ankle.x + 0.02 * k, 0, ankle.z), P(ankle.x + 0.02 * k, 0.07 * k, ankle.z));
+      g.add(leg, foot);
+    }
 
-    // ---- 腕 (毎フレーム poseArcher で関節位置を解く) ----
+    // ---- 頭: 顔は的 (+z) を向き、右目が矢の真上 (物理の eye) に来る ----
+    // 8×8 ドット。右目の中心は頭の中心から +2 ドット (= +x 側)、目の段は下から 3 段目
+    const px = head / 8;
+    const hc = P(eye.x - 2 * px, eye.y + 2.5 * px, eye.z - head / 2);
+    const face = pixelMaterial([
+      'hhhhhhhh', 'hhhhhhhh', 'hffffffh', 'ffffffff', 'fWEffEWf', 'fffnnfff', 'ffmmmmff', 'ffffffff',
+    ], { h: C.hair, f: C.skin, W: C.eyeW, E: C.eye, n: C.skinD, m: C.mouth });
+    // 側面: 前半分が顔 (肌)、後ろ半分が髪。+x 面は左端が前、−x 面は右端が前 (BoxGeometry の UV の向き)
+    const sideRows = (front) => ['hhhhhhhh', 'hhhhhhhh', 'hhhhhhhh', 'hhhhffff', 'hhhhfkff', 'hhhhffff', 'hhhhffff', 'hhhhffff']
+      .map((r) => (front === 'left' ? [...r].reverse().join('') : r));
+    const pal = { h: C.hair, f: C.skin, k: C.skinD };
+    const headM = new THREE.Mesh(new THREE.BoxGeometry(head, head, head), [
+      pixelMaterial(sideRows('left'), pal), pixelMaterial(sideRows('right'), pal),
+      pixelMaterial(['hhhhhhhh', 'hHhhhhHh', 'hhhhhhhh', 'hhhHhhhh', 'hhhhhhhh', 'hHhhhhhh', 'hhhhhHhh', 'hhhhhhhh'], { h: C.hair, H: C.hairL }),
+      skin, face,
+      pixelMaterial(['hhhhhhhh', 'hhhhhhhh', 'hhhhhhhh', 'hhhhhhhh', 'hhhhhhhh', 'hhhhhhhh', 'hhhhhhhh', 'hHhhhhHh'], { h: C.hair, H: C.hairL }),
+    ]);
+    headM.position.copy(hc);
+    headM.castShadow = true;
+    g.add(headM);
+    this.head = headM;
+
+    // ---- 腕 (毎フレーム poseArcher で関節位置を解く)。上腕は袖、前腕と手は肌 ----
     const arm = () => ({
-      upper: makeBone(0.048 * k, 0.038 * k, shirt),
-      fore: makeBone(0.036 * k, 0.028 * k, skin),
-      elbow: ellipsoid(0.04 * k, 0.04 * k, 0.04 * k, shirt),
-      hand: ellipsoid(0.028 * k, 0.045 * k, 0.05 * k, skin),
+      upper: makeBlock(limb, limb, shirt, limb / 2),
+      fore: makeBlock(limb * 0.92, limb * 0.92, skin, 0.01),
+      elbow: block(limb * 0.95, limb * 0.95, limb * 0.95, skin),
+      hand: makeBlock(limb * 0.95, limb * 0.75, skin),
     });
     this.bowArm = arm();
     this.drawArm = arm();
-    this.armGuard = makeBone(0.04 * k, 0.034 * k, gear);
-    this.tab = ellipsoid(0.01, 0.04 * k, 0.035 * k, gear);
+    this.armGuard = makeBlock(limb * 1.08, limb * 1.08, gear);
+    this.tab = block(0.02, limb * 0.8, limb * 0.8, gear);
     for (const a of [this.bowArm, this.drawArm]) g.add(a.upper, a.fore, a.elbow, a.hand);
     g.add(this.armGuard, this.tab);
+    this.drawShoulder = { position: new THREE.Vector3() };   // 引き手の肩 (肩甲骨ごと前に出る) の現在位置
     this.released = false;
     this.poseArcher();
   }
@@ -437,27 +457,27 @@ export class RangeScene {
     const b = this.body;
     if (!b || !this.bowArm) return;
     const P = (x, y, z) => new THREE.Vector3(x, y, z);
+    const up = P(0, 1, 0);
     const place = (arm, shoulder, wrist, handTip, pole) => {
       const { joint, end } = solveTwoBone(shoulder, wrist, b.upper, b.fore, pole);
-      arm.upper.update(shoulder, joint);
-      arm.fore.update(joint, end);
+      arm.upper.update(shoulder, joint, up);
+      arm.fore.update(joint, end, up);
       arm.elbow.position.copy(joint);
-      const hd = handTip.clone().sub(end);
-      arm.hand.position.copy(end).add(hd.clone().multiplyScalar(0.5));
-      arm.hand.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), hd.normalize());
+      arm.elbow.quaternion.copy(arm.upper.quaternion);
+      arm.hand.update(end, handTip, up);
       return { joint, end };
     };
     // 弓手: 的に向けてまっすぐ伸ばす (肘は弦を避けて外側 −x へわずかに回すだけ)。手首はグリップの少し後ろ
-    const grip = P(0.0, this.gripY, -0.005);
-    const bw = place(this.bowArm, b.sh.bow, P(-0.01, this.gripY + 0.005, -0.065 * b.k), grip, P(-1, -0.3, 0));
-    this.armGuard.update(bw.joint.clone().lerp(bw.end, 0.35), bw.end.clone().lerp(bw.joint, 0.05));
+    const grip = P(0.0, this.gripY, 0.01);
+    const bw = place(this.bowArm, b.sh.bow, P(-0.01, this.gripY + 0.005, -0.075 * b.k), grip, P(-1, -0.3, 0));
+    this.armGuard.update(bw.joint.clone().lerp(bw.end, 0.3), bw.end.clone().lerp(bw.joint, 0.08), up);
 
     // 引き手: 指は弦のノッキング位置 (フルドローではあご下のアンカー)。左腕と重ならないよう、
     // 腕は体の前 (胸の側 +x) を回し、手の甲はあごの右側 (+x) に沿わせる。肘も胸の側・やや後ろへ出す。
     let fingers;
-    if (this.released) fingers = P(0.06 * b.k, b.yA - 0.02, this.prep.eye[2] - 0.2 * b.k);   // フォロースルー
-    else fingers = P(0, b.yA - 0.005, this.stringZ ?? -0.2);
-    const wrist = fingers.clone().add(P(0.055 * b.k, -0.02, -0.07 * b.k));
+    if (this.released) fingers = P(0.07 * b.k, b.yA - 0.03, this.prep.eye[2] - 0.2 * b.k);   // フォロースルー
+    else fingers = P(0, b.yA - 0.01, this.stringZ ?? -0.2);
+    const wrist = fingers.clone().add(P(0.06 * b.k, -0.025, -0.08 * b.k));
     // 弦がまだ遠い (引き始め) ときは、肩甲骨ごと肩を前へ出して届かせる
     const shoulder = b.sh.draw.clone();
     const reach = (b.upper + b.fore) * 0.98;
@@ -466,7 +486,7 @@ export class RangeScene {
     if (excess > 0) shoulder.add(toWrist.normalize().multiplyScalar(Math.min(excess, SHOULDER_PROTRACT_MAX)));
     this.drawShoulder.position.copy(shoulder);
     const dw = place(this.drawArm, shoulder, wrist, fingers, P(1, 0.1, -0.5));
-    this.tab.position.copy(dw.end.clone().lerp(fingers, 0.7));
+    this.tab.position.copy(dw.end.clone().lerp(fingers, 0.85));
     this.tab.quaternion.copy(this.drawArm.hand.quaternion);
   }
 
