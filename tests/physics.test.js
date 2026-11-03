@@ -360,11 +360,14 @@ test('リムの振動: 軽い矢ほど大きく、リムダンパーで早く収
   const v = prep.vib;
   assert.ok(v.freq > 10 && v.freq < 80, `freq ${v.freq}`);
   assert.ok(v.ampTop > 0.003 && v.ampTop < 0.05, `amp ${v.ampTop}`);
-  const light = limbVibration(s.bow, s.stabilizer, prep.drawIn, prep.arrow.mass * 0.6, prep.model.mass);
+  const { powerStroke } = await import('../src/physics/bowdynamics.js');
+  const vibFor = (setup, mass) => limbVibration(setup.bow, setup.stabilizer, prep.drawIn, mass, prep.model.mass, prep.bowModel,
+    powerStroke(prep.bowModel, prep.drawIn, mass, setup.bow.eta).v0);
+  const light = vibFor(s, prep.arrow.mass * 0.6);
   assert.ok(light.energy > v.energy, '軽い矢');
   const damped = defaultSetup();
   damped.stabilizer.limbDampers = true;
-  const vd = limbVibration(damped.bow, damped.stabilizer, prep.drawIn, prep.arrow.mass, prep.model.mass);
+  const vd = vibFor(damped, prep.arrow.mass);
   assert.ok(vd.decayTime < v.decayTime * 0.6, 'リムダンパー');
   // 減衰振動: 1/20 に減衰するまでの時刻以降は包絡線が 5% 以下
   const t = v.decayTime + 1e-3;
@@ -431,4 +434,24 @@ test('数値積分: 刻み 0.5ms の RK4 は 0.05ms と着弾点が 0.01mm 以�
   const run = (dt) => simulateFlight(init, p.arrow, wind, { targetZ: 69, dt, env: p.flightEnv }).impact.r;
   const a = run(0.0005), b = run(0.00005);
   assert.ok(Math.hypot(a[0] - b[0], a[1] - b[1]) < 1e-5);
+});
+
+test('発射の動力学: 28" で表示ポンド・曲線の形に一致し、効率は重い矢ほど高く、矢は 10〜20ms で離れる', async () => {
+  const { buildBowModel, powerStroke, drawForce, potential, stringTension } = await import('../src/physics/bowdynamics.js');
+  const bow = defaultSetup().bow;
+  const m = buildBowModel(bow);
+  const s28 = (28 - 1.75) * INCH;
+  close(drawForce(m, s28) / LBF, bow.markedLbs, 0.05);
+  close(potential(m, s28) / (drawForce(m, s28) * (s28 - bow.braceIn * INCH)), 1 / (1 + bow.curveExp), 0.005);
+  const eff = (gr) => {
+    const r = powerStroke(m, 28, gr * GRAIN, bow.eta);
+    assert.ok(r.tExit > 0.010 && r.tExit < 0.020, `tExit ${r.tExit}`);
+    return (0.5 * gr * GRAIN * r.v0 ** 2) / potential(m, s28);
+  };
+  assert.ok(eff(300) < eff(380) && eff(380) < eff(450));
+  close(eff(380), 0.78, 0.03);   // 10 gpp で約 0.78 (実測の範囲)
+  // 効率 = η · m / (m + m_nock): リムはブレース位置で止まるので、その運動エネルギーは矢と弦に渡る
+  close(eff(380), (bow.eta * 380 * GRAIN) / (380 * GRAIN + m.mNock), 0.003);
+  // 引いている間は弦の張力がブレース時より小さい (リカーブの特徴)
+  assert.ok(stringTension(m, s28) < stringTension(m, bow.braceIn * INCH));
 });

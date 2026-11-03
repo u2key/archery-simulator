@@ -290,7 +290,9 @@
           <num-field label="ブレースハイト" unit="inch" v-model="setup.bow.braceIn" :step="0.125" :min="6" :max="10"></num-field>
           <num-field label="効率 η (損失を除く)" unit="" v-model="setup.bow.eta" :step="0.01" :min="0.6" :max="1" hint="ヒステリシス・弦の振動・音で失う分を除いた割合。矢への効率は η·m/(m+m_eff)"></num-field>
           <num-field label="引き重量曲線 p" unit="" v-model="setup.bow.curveExp" :step="0.05" :min="0.4" :max="1.2" hint="F ∝ s^p。1 = 直線 (spec の式)、リカーブは 0.7〜0.8"></num-field>
-          <num-field label="等価運動質量 m_eff" unit="g" v-model="setup.bow.effMassG" :step="1" :min="0" :max="40"></num-field>
+          <num-field label="弦の質量" unit="g" v-model="setup.bow.stringMassG" :step="0.5" :min="3" :max="20"></num-field>
+          <num-field label="弦の付加質量 (ノッキング等)" unit="g" v-model="setup.bow.effMassG" :step="0.5" :min="0" :max="10"></num-field>
+          <num-field label="ボウの長さ" unit="inch" v-model="setup.bow.bowLengthIn" :step="2" :min="60" :max="72"></num-field>
         </div>
         <div>
           <num-field label="ティラー差 (上−下)" unit="mm" v-model="setup.bow.tillerMm" :step="0.5" hint="最適 4mm からのずれで上下のピッチングと縦ばらつき"></num-field>
@@ -311,8 +313,9 @@
         <div v-if="info" class="text-xs text-slate-400 leading-5 tabular">
           <div class="text-slate-200 mb-1">4.1 初速モデル</div>
           <div>引き尺 {{ fmt(info.drawIn, 2) }}" → 実効 {{ fmt(info.lbs) }} lbs</div>
-          <div>蓄積エネルギー E = F·s/(1+p) = {{ fmt(info.energy) }} J (s = 引き尺 − 1.75" − BH)</div>
-          <div>初速 v₀ = {{ fmt(info.v0) }} m/s ({{ fmt(info.v0 / 0.3048, 0) }} fps)</div>
+          <div>蓄積エネルギー {{ fmt(info.energy) }} J (s = 引き尺 − 1.75" − BH)</div>
+          <div>初速 v₀ = {{ fmt(info.v0) }} m/s ({{ fmt(info.v0 / 0.3048, 0) }} fps) / 効率 {{ fmt(info.efficiency * 100, 0) }}%</div>
+          <div>矢が弦を離れるまで {{ fmt(info.tExit * 1000, 1) }} ms / 弦の張力 ブレース {{ fmt(info.tension.brace, 0) }} N・フルドロー {{ fmt(info.tension.full, 0) }} N</div>
           <div class="mt-1">ボウ総質量 {{ fmt(info.bowMass, 2) }} kg</div>
           <div class="text-slate-200 mt-2 mb-1">リムの振動 (矢が離れた後)</div>
           <div>固有振動数 {{ fmt(info.vib.freq) }} Hz / 減衰比 ζ {{ fmt(info.vib.zeta, 3) }}</div>

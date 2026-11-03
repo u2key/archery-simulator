@@ -44,9 +44,12 @@ export function defaultSetup() {
       rest: 'Metal',
       clickerOffsetMm: 0,  // クリッカー位置 (自然な引き尺からのズレ。+ で引き過ぎ側)
       nockingMm: 10,       // ノッキングポイント高さ (直角位置から上へ)
-      // 効率: 矢の運動エネルギー / 蓄積エネルギー = η · m / (m + m_eff)。既定値で 10 gpp のとき約 0.78
-      eta: 0.91,           // ヒステリシス・弦の振動・音を除いた効率 η
-      effMassG: 4,         // リム・弦の等価運動質量 (仮想質量) m_eff [g]
+      // 発射はリム・弦の集中定数モデルで解く (bowdynamics.js)。効率 = η · m / (m + 弦の質量/3 + 付加質量)
+      eta: 0.9,            // ヒステリシス (リム材の内部損失) による効率 η
+      effMassG: 1,         // 弦の付加質量 (ノッキングポイント・サービング) [g]
+      stringMassG: 8,      // 弦の質量 [g]
+      bowLengthIn: 68,     // ボウの長さ (AMO)
+      riserLengthIn: 25,   // ハンドルの長さ
       curveExp: 0.75,      // 引き重量曲線の形 F ∝ s^p (1 = 直線。リカーブは 0.7〜0.8 程度)
       riserMassG: 1250,
       limbMassG: 160,      // 片側

@@ -5,7 +5,6 @@ import { defaultSetup, ARROW_MATERIALS, VANE_SHAPES, VANE_MATERIALS, TARGET_FACE
 import { prepare, shoot, autoSight, aimSway } from '../physics/shot.js';
 import { createWindField } from '../physics/wind.js';
 import { createRng } from '../physics/random.js';
-import { storedEnergy } from '../physics/bow.js';
 import { createScoreCard, addArrow, summary, isComplete, ENDS, ARROWS_PER_END } from '../physics/scoring.js';
 import { applyCorrection, correctionMm, groupCenter } from '../physics/sight.js';
 import { toDeg, MRAD } from '../physics/units.js';
@@ -180,7 +179,8 @@ const App = {
       prep = prepare(s);
       const a = prep.arrow;
       info.value = {
-        drawIn: prep.drawIn, lbs: prep.lbs, energy: storedEnergy(s.bow, prep.drawIn), v0: prep.v0,
+        drawIn: prep.drawIn, lbs: prep.lbs, energy: prep.energy, v0: prep.v0, tExit: prep.stroke.tExit,
+        efficiency: (0.5 * prep.arrow.mass * prep.v0 ** 2) / prep.energy, tension: prep.bowTension,
         arrowG: a.mass * 1000, foc: a.foc * 100, f: a.fSpine, EI: a.EI, req: a.requiredSpine, dyn: a.dynamicSpine,
         mismatch: a.mismatch, eff: a.effMismatch, cd: a.cd, A0: a.paradox.A0 * 1000, gamma: a.paradox.gamma,
         I: prep.I, cDamp: prep.cDamp, bowMass: prep.model.mass, cg: prep.model.cg, warnings: a.warnings, stable: a.stable,

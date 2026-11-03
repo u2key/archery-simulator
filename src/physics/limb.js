@@ -2,19 +2,21 @@
 //
 //   x(t) = A · e^(−ζωt) · sin(ω_d t)        (t は矢が離れた瞬間 = 弦がブレース位置に戻った瞬間から)
 //
-// ・エネルギー: v0 = sqrt(2ηE / (m_arrow + m_eff)) のとき、ブレース位置でリム・弦 (m_eff) が持つ運動エネルギー
-//   ηE · m_eff / (m_arrow + m_eff) と、損失 (1−η)E の一部が振動になる。軽い矢ほど残りが大きい (空打ちが最悪)。
+// ・エネルギー: パワーストロークのモデル (bowdynamics.js) では、ブレース位置でリムは止まり、弦 (ノックに付く
+//   等価質量 m_nock) が矢と同じ速さで動いている。矢が離れると弦の運動量をリム先端が受け止めて振動になる。
+//   これに損失 (1−η)E の一部を足す。軽い矢ほど同じエネルギーで弦が速いので大きい (空打ちが最悪)。
 // ・先端の剛性: 各リムの蓄積エネルギー E/2 = ½ k_tip d_tip² (d_tip = 引いたときの先端の移動量)。
 // ・減衰: リム自体 + リムダンパー + スタビライザーのダンパー (ハンドルに伝わった振動を吸う)。
 // ・上下のリムの振幅差 (ティラー差) はハンドルを上下に揺するピッチトルクになる (フォロースルーに影響)。
 // 矢が離れた後に始まるので、その矢の飛び方には影響しない。
-import { storedEnergy, effectiveLbs, strokeIn } from './bow.js';
+import { effectiveLbs, strokeIn } from './bow.js';
+import { potential } from './bowdynamics.js';
 import { INCH, LBF, G } from './units.js';
 
 export const TIP_TRAVEL_RATIO = 0.25;   // 先端の移動量 / 引き尺のストローク
 const TIP_MASS_RATIO = 0.25;            // リムの等価質量 (先端換算) / リム質量
-const LOSS_TO_VIBRATION = 0.3;          // 損失 (1−η)E のうち振動になる割合
-const LIMB_SHARE = 0.12;                // 残ったエネルギーのうちリムの 1 次モードに入る割合 (残りは弦の振動・音・熱)
+const LOSS_TO_VIBRATION = 0.1;          // 損失 (1−η)E のうちリムの振動になる割合 (残りは熱・音)
+const STRING_TO_LIMB = 0.3;             // 弦の運動エネルギーのうちリムの 1 次モードに入る割合 (残りは弦の振動・音)
 const POCKET_LEVER = 0.3;               // リムポケット (力の作用点) のグリップからの高さ [m]
 const TRANSMISSION = 0.3;               // 先端の復元力のうちハンドルへ前後に伝わる割合
 const ZETA_LIMB = 0.035;                // リム自体の減衰比
@@ -28,14 +30,16 @@ const STRING_FREQ_RATIO = 2.6;          // 弦の振動数 / リムの振動数 
  * @param {number} drawIn  引き尺 [inch]
  * @param {number} arrowMassKg
  * @param {number} bowMassKg  ボウ全体の質量 (ハンドルの加速度の計算用)
+ * @param {object} model   bowdynamics の buildBowModel の結果
+ * @param {number} v0      初速 [m/s]
  */
-export function limbVibration(bow, stab, drawIn, arrowMassKg, bowMassKg) {
-  const E = storedEnergy(bow, drawIn);
+export function limbVibration(bow, stab, drawIn, arrowMassKg, bowMassKg, model, v0) {
   const stroke = strokeIn(bow, drawIn) * INCH;
-  const mEff = bow.effMassG / 1000;
-  const kinetic = (bow.eta * E * mEff) / (arrowMassKg + mEff);
-  const residual = kinetic + LOSS_TO_VIBRATION * (1 - bow.eta) * E;
-  const energy = LIMB_SHARE * residual;          // 上下 2 本のリムの振動エネルギーの合計 [J]
+  const E = potential(model, (drawIn - 1.75) * INCH);
+  const mEff = model.mNock;
+  const kinetic = 0.5 * mEff * v0 * v0;           // ブレース位置で弦が持つ運動エネルギー
+  const residual = kinetic + (1 - bow.eta) * E;   // 矢に渡らなかったエネルギー
+  const energy = STRING_TO_LIMB * kinetic + LOSS_TO_VIBRATION * (1 - bow.eta) * E;   // 上下 2 本のリムの振動エネルギー [J]
 
   const dTip = TIP_TRAVEL_RATIO * stroke;
   const kTip = dTip > 0 ? E / 2 / (dTip * dTip) : 0;   // 各リム先端の剛性 [N/m]

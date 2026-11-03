@@ -9,6 +9,7 @@ import {
 import { arrowProperties } from './arrow.js';
 import { limbVibration, vibrationTorque } from './limb.js';
 import { airProperties, gravityAt, coriolis } from './atmosphere.js';
+import { buildBowModel, powerStroke, potential, stringTension } from './bowdynamics.js';
 import { simulateFlight } from './ballistics.js';
 import { calmWind } from './wind.js';
 import { aimAngles, applyCorrection, EYE_ABOVE_ARROW } from './sight.js';
@@ -45,7 +46,10 @@ export function prepare(setup) {
   const model = bowMassModel(setup.bow, setup.stabilizer);
   const I = inertiaTensor(model.points);
   const cDamp = dampingCoefficient(setup.stabilizer);
-  const v0 = launchSpeed(setup.bow, drawIn, arrow.mass, REST_FRICTION[setup.bow.rest] * 0.06);
+  // 発射: ボウの集中定数モデルでパワーストロークを解く (初速・矢が離れるまでの時間・加速度の時間変化)
+  const bowModel = buildBowModel(setup.bow);
+  const stroke = powerStroke(bowModel, drawIn, arrow.mass, setup.bow.eta, REST_FRICTION[setup.bow.rest] * 0.06);
+  const v0 = stroke.v0;
   const hArrow = setup.player.heightCm * 0.0083;
   const eye = [0, hArrow + EYE_ABOVE_ARROW, -nockDistanceM(drawIn)];
   // 射距離はシューティングラインから的面まで (WA 規則)。ボウ (z=0) はラインより前に出ているので、
@@ -61,7 +65,9 @@ export function prepare(setup) {
   };
   return {
     drawIn, lbs, arrow, model, I, cDamp, v0, hArrow, eye, eyeElev, swaySigma, D, lineZ,
-    vib: limbVibration(setup.bow, setup.stabilizer, drawIn, arrow.mass, model.mass),
+    bowModel, stroke, energy: potential(bowModel, nockDistanceM(drawIn)),
+    bowTension: { brace: stringTension(bowModel, bowModel.g.sB), full: stringTension(bowModel, nockDistanceM(drawIn)) },
+    vib: limbVibration(setup.bow, setup.stabilizer, drawIn, arrow.mass, model.mass, bowModel, v0),
     flightEnv: flightEnvironment(setup.environment),
     face: faceDiameterCm(setup.environment.distance),
     swayNoise: createNoise4D(setup.environment.seed + 101),
@@ -108,9 +114,9 @@ export function shoot(setup, prep, o = {}) {
   // クリッカー: 自然な引き尺からずれた位置に設定すると、切るまでの引き量がばらつく
   const drawSigma = player.skill * (0.03 + 0.008 * Math.abs(bow.clickerOffsetMm));
   const drawIn = prep.drawIn + bow.clickerOffsetMm / 25.4 + (o.drawDeltaIn ?? 0) + N(drawSigma);
-  const v0 = launchSpeed(bow, drawIn, arrow.mass, mu * 0.06);
-  const stroke = strokeIn(bow, drawIn) * INCH;
-  const tExit = (2 * stroke) / v0;
+  const ps = powerStroke(prep.bowModel, drawIn, arrow.mass, bow.eta, mu * 0.06);
+  const v0 = ps.v0;
+  const tExit = ps.tExit;
 
   // 4.2: リリース瞬間のトルク。ティラーずれ・センターずれで系統的な成分が、手の力みでランダム成分が加わる。
   const F = effectiveLbs(bow, drawIn) * LBF;
@@ -122,7 +128,7 @@ export function shoot(setup, prep, o = {}) {
     N(0.3 * ts),
   ];
   // リムの振動: 矢が離れた瞬間 (tExit) から始まり、上下の振幅差がハンドルを揺する
-  const limbVib = limbVibration(bow, setup.stabilizer, drawIn, arrow.mass, prep.model.mass);
+  const limbVib = limbVibration(bow, setup.stabilizer, drawIn, arrow.mass, prep.model.mass, prep.bowModel, v0);
   const motion = simulateBowRelease(prep.model, prep.I, {
     torque0, cDamp: prep.cDamp, duration: o.bowMotion ? 1.6 : tExit + 0.001, probeTime: tExit, sampleEvery: 1 / 60,
     extraTorque: (t) => [vibrationTorque(limbVib, t - tExit), 0, 0],
