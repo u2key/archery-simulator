@@ -10,13 +10,15 @@ export const ARROW_MATERIALS = {
   Aluminum: { diameterMm: 7.1, gamma: 12, label: 'アルミ' },
 };
 
-// ベイン形状: 面積 S_v [m^2] (3枚合計), 法線力係数傾斜 C_Nα [1/rad], 抗力面積 C_D·A [m^2], 1回転する飛行距離 [m]
+// ベイン形状 (1 枚の寸法)。空力係数はここから翼理論で計算する (arrow.js)。
+//   lengthMm: 長さ, heightMm: 高さ, thicknessMm: 厚さ, fill: 長方形に対する面積の割合 (シールド形 ≈ 0.6),
+//   cantDeg: 軸に対する取付角 (ヘリカル・カール)。自転の速さを決める。
 export const VANE_SHAPES = {
-  Spin: { area: 13e-4, cnAlpha: 2.2, dragArea: 1.6e-5, spinPitch: 1.6, label: 'スピンベイン' },
-  Straight: { area: 10e-4, cnAlpha: 2.2, dragArea: 1.0e-5, spinPitch: 15, label: 'ストレートベイン' },
+  Spin: { lengthMm: 44, heightMm: 10, thicknessMm: 0.15, fill: 0.62, cantDeg: 1.5, label: 'スピンベイン' },
+  Straight: { lengthMm: 45, heightMm: 11, thicknessMm: 0.4, fill: 0.6, cantDeg: 0.25, label: 'ストレートベイン' },
 };
 
-// ベイン材質: 3枚+ノックの質量 [grain], 抗力倍率, 法線力倍率
+// ベイン材質: 3枚+ノックの質量 [grain], 表面の粗さによる摩擦抗力の倍率, 法線力の倍率 (羽は柔らかく反りがある)
 export const VANE_MATERIALS = {
   Film: { rearGrain: 18, dragMul: 1.0, cnMul: 1.0, label: 'フィルム' },
   Rubber: { rearGrain: 30, dragMul: 1.25, cnMul: 1.0, label: 'ゴム' },

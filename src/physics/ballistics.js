@@ -7,7 +7,6 @@ import { add, sub, scale, dot, cross, norm, normalize, addScaled } from './vec.j
 import { paradoxDeflection } from './arrow.js';
 
 const PARADOX_DRAG = 0.3;   // しなり振幅/外径 の2乗に比例する抗力増加
-const ROLL_TAU = 0.15;      // 自転が平衡回転数に近づく時定数 [s]
 
 /**
  * 運動方程式の右辺。
@@ -35,27 +34,31 @@ export function forces(state, t, arrow, wind, env = {}) {
   const Fdrag = scale(vrel, -q * dragArea * V);
 
   const axisCross = cross(d, vh);                     // |d×v̂| = sin α
-  const Flift = scale(cross(vh, axisCross), q * arrow.normalArea * V * V);
+  const sinA = norm(axisCross);
+  // 法線力: 線形 (ベイン + 細長体) + 横流れ (sin²α)
+  const Flift = scale(cross(vh, axisCross), q * (arrow.normalArea + (arrow.crossArea ?? 0) * sinA) * V * V);
   const Fmagnus = scale(cross(scale(d, p), vrel), q * arrow.cm * arrow.area * arrow.r);
   const F = add(add(Fdrag, Flift), Fmagnus);
   const acc = [F[0] / m + ac[0], F[1] / m - g + ac[1], F[2] / m + ac[2]];
 
   // 重心まわりのモーメント: ベインによる風見安定 (d̂ を v̂ へ向ける) と首振り減衰
-  const torque = sub(scale(axisCross, q * arrow.momentArea * V * V), scale(omega, q * arrow.dampArea * V));
-  return { acc, torque, vrel, V, Re, alpha: Math.asin(Math.min(1, norm(axisCross))), Fdrag, Flift, Fmagnus };
+  const torque = sub(scale(axisCross, q * (arrow.momentArea + (arrow.crossMomentArea ?? 0) * sinA) * V * V), scale(omega, q * arrow.dampArea * V));
+  return { acc, torque, vrel, V, Re, q, alpha: Math.asin(Math.min(1, sinA)), Fdrag, Flift, Fmagnus };
 }
 
 function derivative(state, t, arrow, wind, env) {
   const f = forces(state, t, arrow, wind, env);
   let dw = scale(f.torque, 1 / arrow.inertiaT);
   dw = sub(dw, scale(state.d, dot(dw, state.d)));    // 軸方向の成分 (自転) は p で別に扱う
+  // 自転: ベインのカント角で決まる平衡回転数へ、ロール減衰 (½ρV · C_Lα S r_v² · 3) と軸まわりの慣性で決まる時定数で近づく
   const pEq = (2 * Math.PI * dot(f.vrel, state.d)) / arrow.spinPitch;
+  const rollTau = arrow.rollInertia && arrow.rollDampArea ? arrow.rollInertia / Math.max(1e-12, f.q * f.V * arrow.rollDampArea) : 0.15;
   return {
     r: state.v,
     v: f.acc,
     d: cross(state.w, state.d),
     w: dw,
-    p: (pEq - state.p) / ROLL_TAU,
+    p: (pEq - state.p) / Math.max(rollTau, 1e-4),
   };
 }
 

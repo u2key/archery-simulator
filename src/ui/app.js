@@ -185,7 +185,8 @@ const App = {
         mismatch: a.mismatch, cd: a.cd, gamma: a.paradox.gamma,
         I: prep.I, cDamp: prep.cDamp, bowMass: prep.model.mass, cg: prep.model.cg, warnings: a.warnings, stable: a.stable,
         face: prep.face, vib: prep.vib, air: prep.flightEnv.air, g: prep.flightEnv.g,
-        cdLam: a.cdLaminar, cdTurb: a.cdTurbulent,
+        cdLam: a.cdLaminar, cdTurb: a.cdTurbulent, vaneCl: a.vane.clAlpha, vaneAR: a.vane.AR, spinPitch: a.spinPitch,
+        margin: a.staticMargin,
       };
       const ideal = shoot(s, prep, { noise: false });
       predicted = ideal.flight.reached ? { x: ideal.dx, y: ideal.dy } : null;

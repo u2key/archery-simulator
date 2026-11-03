@@ -403,6 +403,7 @@
           <div class="text-slate-200 mb-1">質量・空力</div>
           <div>質量 {{ fmt(info.arrowG, 2) }} g / FOC {{ fmt(info.foc) }} %</div>
           <div>抗力係数 C_D 層流 {{ fmt(info.cdLam, 2) }} / 乱流 {{ fmt(info.cdTurb, 2) }} (断面積基準・ベイン込み。Re ≈ 1.5×10⁴ で遷移)</div>
+          <div>ベイン (翼理論) AR {{ fmt(info.vaneAR, 2) }} / C_Lα {{ fmt(info.vaneCl, 2) }} /rad / 1 回転 {{ fmt(info.spinPitch, 1) }} m</div>
           <div :class="info.stable ? '' : 'text-rose-400'">{{ info.stable ? '風見安定: 良好' : '風見安定: 不安定 (重心が後ろすぎ)' }}</div>
           <div v-for="w in info.warnings" class="text-amber-400">{{ w }}</div>
         </div>
