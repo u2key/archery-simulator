@@ -16,6 +16,7 @@ const NAME_MAX = 20;
 const ENV_LIMITS = {
   windSpeed: [0, 15], windDirDeg: [-360, 720], turbulence: [0, 5], refHeight: [0.5, 20],
   shearExp: [0, 1], lengthScale: [1, 500], timeScale: [0.1, 60], seed: [-1e9, 1e9],
+  temperatureC: [-30, 50], altitudeM: [-400, 5000], humidity: [0, 1], latitudeDeg: [-90, 90], rangeAzimuthDeg: [-360, 720],
 };
 
 function cleanName(name, fallback) {

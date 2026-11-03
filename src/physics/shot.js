@@ -4,10 +4,11 @@ import { createRng } from './random.js';
 import { createNoise4D } from './simplex.js';
 import { REST_FRICTION } from './config.js';
 import {
-  drawLengthIn, effectiveLbs, launchSpeed, bowMassModel, inertiaTensor, dampingCoefficient, simulateBowRelease, HAND_INERTIA,
+  drawLengthIn, effectiveLbs, launchSpeed, nockDistanceM, strokeIn, bowMassModel, inertiaTensor, dampingCoefficient, simulateBowRelease, HAND_INERTIA,
 } from './bow.js';
 import { arrowProperties } from './arrow.js';
 import { limbVibration, vibrationTorque } from './limb.js';
+import { airProperties, gravityAt, coriolis } from './atmosphere.js';
 import { simulateFlight } from './ballistics.js';
 import { calmWind } from './wind.js';
 import { aimAngles, applyCorrection, EYE_ABOVE_ARROW } from './sight.js';
@@ -26,6 +27,17 @@ const NOISE_STD = 0.28 * Math.hypot(1, 0.5);
 // 射手はシューティングラインをまたいで立つ。体の中心 (=ライン) はアンカー位置よりこれだけ後ろ [m]
 export const STANCE_BEHIND_ANCHOR = 0.16;
 
+/** 弾道計算の環境: 空気 (気温・標高・湿度)、緯度・標高による重力、地球の自転 (緯度と的の方位) */
+export function flightEnvironment(env) {
+  const air = airProperties(env);
+  const lat = env.latitudeDeg ?? 35.7;
+  return {
+    rho: air.rho, nu: air.nu, air,
+    g: gravityAt(lat, env.altitudeM ?? 0),
+    coriolis: env.coriolis === false ? null : coriolis(lat, env.rangeAzimuthDeg ?? 0),
+  };
+}
+
 export function prepare(setup) {
   const drawIn = drawLengthIn(setup.player);
   const lbs = effectiveLbs(setup.bow, drawIn);
@@ -35,7 +47,7 @@ export function prepare(setup) {
   const cDamp = dampingCoefficient(setup.stabilizer);
   const v0 = launchSpeed(setup.bow, drawIn, arrow.mass, REST_FRICTION[setup.bow.rest] * 0.06);
   const hArrow = setup.player.heightCm * 0.0083;
-  const eye = [0, hArrow + EYE_ABOVE_ARROW, -drawIn * INCH];
+  const eye = [0, hArrow + EYE_ABOVE_ARROW, -nockDistanceM(drawIn)];
   // 射距離はシューティングラインから的面まで (WA 規則)。ボウ (z=0) はラインより前に出ているので、
   // ボウから的までの距離 D は射距離より短い。
   const lineZ = eye[2] - STANCE_BEHIND_ANCHOR;
@@ -50,6 +62,7 @@ export function prepare(setup) {
   return {
     drawIn, lbs, arrow, model, I, cDamp, v0, hArrow, eye, eyeElev, swaySigma, D, lineZ,
     vib: limbVibration(setup.bow, setup.stabilizer, drawIn, arrow.mass, model.mass),
+    flightEnv: flightEnvironment(setup.environment),
     face: faceDiameterCm(setup.environment.distance),
     swayNoise: createNoise4D(setup.environment.seed + 101),
   };
@@ -96,7 +109,7 @@ export function shoot(setup, prep, o = {}) {
   const drawSigma = player.skill * (0.03 + 0.008 * Math.abs(bow.clickerOffsetMm));
   const drawIn = prep.drawIn + bow.clickerOffsetMm / 25.4 + (o.drawDeltaIn ?? 0) + N(drawSigma);
   const v0 = launchSpeed(bow, drawIn, arrow.mass, mu * 0.06);
-  const stroke = (drawIn - bow.braceIn) * INCH;
+  const stroke = strokeIn(bow, drawIn) * INCH;
   const tExit = (2 * stroke) / v0;
 
   // 4.2: リリース瞬間のトルク。ティラーずれ・センターずれで系統的な成分が、手の力みでランダム成分が加わる。
@@ -140,7 +153,7 @@ export function shoot(setup, prep, o = {}) {
   const axis = dirFromAngles(elev + attitudePitch, azim);
 
   const flight = simulateFlight({ r: [0, prep.hArrow, 0], v: dir.map((c) => c * v0), d: axis }, arrow, wind, {
-    targetZ: prep.D, t0: time, recordEvery: o.recordEvery ?? 0.004,
+    targetZ: prep.D, t0: time, recordEvery: o.recordEvery ?? 0.004, env: prep.flightEnv,
   });
   const dx = flight.impact.r[0];
   const dy = flight.impact.r[1] - TARGET_CENTER_HEIGHT;

@@ -8,7 +8,7 @@
 // ・減衰: リム自体 + リムダンパー + スタビライザーのダンパー (ハンドルに伝わった振動を吸う)。
 // ・上下のリムの振幅差 (ティラー差) はハンドルを上下に揺するピッチトルクになる (フォロースルーに影響)。
 // 矢が離れた後に始まるので、その矢の飛び方には影響しない。
-import { storedEnergy, effectiveLbs } from './bow.js';
+import { storedEnergy, effectiveLbs, strokeIn } from './bow.js';
 import { INCH, LBF, G } from './units.js';
 
 export const TIP_TRAVEL_RATIO = 0.25;   // 先端の移動量 / 引き尺のストローク
@@ -31,7 +31,7 @@ const STRING_FREQ_RATIO = 2.6;          // 弦の振動数 / リムの振動数 
  */
 export function limbVibration(bow, stab, drawIn, arrowMassKg, bowMassKg) {
   const E = storedEnergy(bow, drawIn);
-  const stroke = Math.max(0, (drawIn - bow.braceIn) * INCH);
+  const stroke = strokeIn(bow, drawIn) * INCH;
   const mEff = bow.effMassG / 1000;
   const kinetic = (bow.eta * E * mEff) / (arrowMassKg + mEff);
   const residual = kinetic + LOSS_TO_VIBRATION * (1 - bow.eta) * E;

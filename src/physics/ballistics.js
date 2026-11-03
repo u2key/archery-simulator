@@ -1,7 +1,8 @@
 // 4.4 矢の飛翔弾道 (RK4)
 //   m dv/dt = F_gravity + F_drag + F_lift + F_magnus
 // 揚力が矢の軸 d̂ に依存するため、並進 (r, v) に加えて矢の姿勢 d̂・首振り角速度 ω・自転 p も同時に積分する。
-import { G, RHO_AIR } from './units.js';
+import { G } from './units.js';
+import { STANDARD_AIR } from './atmosphere.js';
 import { add, sub, scale, dot, cross, norm, normalize, addScaled } from './vec.js';
 import { paradoxDeflection } from './arrow.js';
 
@@ -13,33 +14,39 @@ const ROLL_TAU = 0.15;      // 自転が平衡回転数に近づく時定数 [s]
  * spec の揚力式 (d̂×v̂)×v̂ は −d̂⊥ (機首と逆向き) になるため符号を反転し、
  * 機首が向いている側へ働く法線力 v̂×(d̂×v̂) = d̂⊥ として扱う。
  * spec のマグヌス式は長さの次元が1つ足りないので、シャフト半径 r を掛けている。
+ * env: { rho 空気密度, nu 動粘性係数, g 重力加速度, coriolis (v → 加速度) }。省略時は標準大気・標準重力
  */
-export function forces(state, t, arrow, wind) {
+export function forces(state, t, arrow, wind, env = {}) {
   const { r, v, d, w: omega, p } = state;
   const vrel = sub(v, wind.at(r[0], r[1], r[2], t));
   const V = norm(vrel);
   const m = arrow.mass;
-  const q = 0.5 * RHO_AIR;
-  if (V < 1e-9) return { acc: [0, -G, 0], torque: [0, 0, 0], vrel, V, alpha: 0 };
+  const q = 0.5 * (env.rho ?? STANDARD_AIR.rho);
+  const g = env.g ?? G;
+  const ac = env.coriolis ? env.coriolis(v) : [0, 0, 0];
+  if (V < 1e-9) return { acc: [ac[0], ac[1] - g, ac[2]], torque: [0, 0, 0], vrel, V, alpha: 0 };
   const vh = scale(vrel, 1 / V);
 
+  // 抗力係数はレイノルズ数 (直径基準) で変わる (境界層の層流 ↔ 乱流)
+  const Re = (V * arrow.d) / (env.nu ?? STANDARD_AIR.nu);
   const ys = paradoxDeflection(arrow.paradox, t);
-  const dragArea = arrow.dragArea * (1 + PARADOX_DRAG * (ys / arrow.d) ** 2);
+  const baseDragArea = arrow.dragAreaAt ? arrow.dragAreaAt(Re) : arrow.dragArea;
+  const dragArea = baseDragArea * (1 + PARADOX_DRAG * (ys / arrow.d) ** 2);
   const Fdrag = scale(vrel, -q * dragArea * V);
 
   const axisCross = cross(d, vh);                     // |d×v̂| = sin α
   const Flift = scale(cross(vh, axisCross), q * arrow.normalArea * V * V);
   const Fmagnus = scale(cross(scale(d, p), vrel), q * arrow.cm * arrow.area * arrow.r);
   const F = add(add(Fdrag, Flift), Fmagnus);
-  const acc = [F[0] / m, F[1] / m - G, F[2] / m];
+  const acc = [F[0] / m + ac[0], F[1] / m - g + ac[1], F[2] / m + ac[2]];
 
   // 重心まわりのモーメント: ベインによる風見安定 (d̂ を v̂ へ向ける) と首振り減衰
   const torque = sub(scale(axisCross, q * arrow.momentArea * V * V), scale(omega, q * arrow.dampArea * V));
-  return { acc, torque, vrel, V, alpha: Math.asin(Math.min(1, norm(axisCross))), Fdrag, Flift, Fmagnus };
+  return { acc, torque, vrel, V, Re, alpha: Math.asin(Math.min(1, norm(axisCross))), Fdrag, Flift, Fmagnus };
 }
 
-function derivative(state, t, arrow, wind) {
-  const f = forces(state, t, arrow, wind);
+function derivative(state, t, arrow, wind, env) {
+  const f = forces(state, t, arrow, wind, env);
   let dw = scale(f.torque, 1 / arrow.inertiaT);
   dw = sub(dw, scale(state.d, dot(dw, state.d)));    // 軸方向の成分 (自転) は p で別に扱う
   const pEq = (2 * Math.PI * dot(f.vrel, state.d)) / arrow.spinPitch;
@@ -62,11 +69,11 @@ function step(s, k, h) {
   };
 }
 
-export function rk4Step(s, t, h, arrow, wind) {
-  const k1 = derivative(s, t, arrow, wind);
-  const k2 = derivative(step(s, k1, h / 2), t + h / 2, arrow, wind);
-  const k3 = derivative(step(s, k2, h / 2), t + h / 2, arrow, wind);
-  const k4 = derivative(step(s, k3, h), t + h, arrow, wind);
+export function rk4Step(s, t, h, arrow, wind, env) {
+  const k1 = derivative(s, t, arrow, wind, env);
+  const k2 = derivative(step(s, k1, h / 2), t + h / 2, arrow, wind, env);
+  const k3 = derivative(step(s, k2, h / 2), t + h / 2, arrow, wind, env);
+  const k4 = derivative(step(s, k3, h), t + h, arrow, wind, env);
   const comb = (key) => {
     const out = [0, 0, 0];
     for (let i = 0; i < 3; i++) out[i] = s[key][i] + (h / 6) * (k1[key][i] + 2 * k2[key][i] + 2 * k3[key][i] + k4[key][i]);
@@ -83,7 +90,7 @@ export function rk4Step(s, t, h, arrow, wind) {
  * @param {object} init { r, v, d } 初期位置・速度・矢の軸
  * @param {object} arrow arrowProperties の結果
  * @param {object} wind  createWindField の結果 (at(x,y,z,t))
- * @param {object} opts  { targetZ, dt, t0, recordEvery }
+ * @param {object} opts  { targetZ, dt, t0, recordEvery, env }  env は forces() を参照
  */
 export function simulateFlight(init, arrow, wind, opts) {
   const dt = opts.dt ?? 0.0005;
@@ -97,7 +104,7 @@ export function simulateFlight(init, arrow, wind, opts) {
   const windAt = { at: (x, y, z, tt) => wind.at(x, y, z, t0 + tt) };
   // パラドックスの時間は発射からの経過時間なので、風だけ時刻をずらす
   while (t < (opts.tMax ?? 6)) {
-    const n = rk4Step(s, t, dt, arrow, windAt);
+    const n = rk4Step(s, t, dt, arrow, windAt, opts.env);
     const tn = t + dt;
     if (n.r[2] >= opts.targetZ) {
       const f = (opts.targetZ - s.r[2]) / (n.r[2] - s.r[2]);

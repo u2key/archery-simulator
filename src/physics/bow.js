@@ -11,22 +11,43 @@ export function drawLengthIn(player) {
   return player.drawLengthIn ?? drawLengthFromHeight(player.heightCm);
 }
 
-// 実効ポンド: リムを線形バネとみなし、ブレースハイト位置を 0 として表示ポンド(28")から比例させる。
-// この仮定のもとで spec 4.1 の E = 1/2 · F · (L_draw − Brace) が厳密な蓄積エネルギーになる。
-export function effectiveLbs(bow, drawIn) {
-  const stroke = drawIn - bow.braceIn;
-  if (stroke <= 0) return 0;
-  return (bow.markedLbs * stroke) / (28 - bow.braceIn);
+// 引き尺は AMO 規格 (ピボット + 1.75")。リムの表示ポンドも AMO 28" で測った値。
+// ノックからピボットまでの実距離は 引き尺 − 1.75"、弦の移動量 (ストローク) はそこからブレースハイトを引いた分。
+export const AMO_OFFSET_IN = 1.75;
+const MARKED_DRAW_IN = 28;
+
+/** ノックからグリップのピボットまでの距離 [m] */
+export function nockDistanceM(drawIn) {
+  return (drawIn - AMO_OFFSET_IN) * INCH;
 }
 
-// 4.1: 蓄積エネルギー [J]
+/** ブレース位置から引いた弦の移動量 [inch] */
+export function strokeIn(bow, drawIn) {
+  return Math.max(0, drawIn - AMO_OFFSET_IN - bow.braceIn);
+}
+
+// 引き重量曲線: F(s) = F_28 · (s / s_28)^p。p = 1 なら直線 (spec の E = ½·F·(L−BH) の形)。
+// リカーブは引き始めに重さが立ち上がって後半は寝るので p < 1 (蓄積エネルギー/(F·s) = 1/(1+p) が 0.5 より大きい)。
+const curveExp = (bow) => bow.curveExp ?? 1;
+
+// 実効ポンド: 引き尺での保持力 [lbs]。AMO 28" で表示ポンドに一致する
+export function effectiveLbs(bow, drawIn) {
+  const s = strokeIn(bow, drawIn);
+  const s28 = MARKED_DRAW_IN - AMO_OFFSET_IN - bow.braceIn;
+  if (s <= 0 || s28 <= 0) return 0;
+  return bow.markedLbs * (s / s28) ** curveExp(bow);
+}
+
+// 4.1: 蓄積エネルギー [J] = ∫ F ds (ブレース位置から引き尺まで) = F · s / (1 + p)
 export function storedEnergy(bow, drawIn) {
   const F = effectiveLbs(bow, drawIn) * LBF;
-  const stroke = (drawIn - bow.braceIn) * INCH;
-  return Math.max(0, 0.5 * F * stroke);
+  const s = strokeIn(bow, drawIn) * INCH;
+  return (F * s) / (1 + curveExp(bow));
 }
 
-// 4.1: v0 = sqrt(2 η E / (m_arrow + m_eff))。restLoss はレスト摩擦によるエネルギー損失率。
+// 4.1: v0 = sqrt(2 η E / (m_arrow + m_eff))。η はヒステリシス・弦の振動・音による損失、
+// m_eff はリム・弦の等価運動質量 (仮想質量)。矢が軽いほど m_eff に取られる割合が増え、効率が下がる。
+// restLoss はレスト摩擦によるエネルギー損失率。
 export function launchSpeed(bow, drawIn, arrowMassKg, restLoss = 0) {
   const E = storedEnergy(bow, drawIn) * (1 - restLoss);
   return Math.sqrt((2 * bow.eta * E) / (arrowMassKg + bow.effMassG / 1000));

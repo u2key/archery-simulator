@@ -7,6 +7,7 @@ import { TARGET_CENTER_HEIGHT } from '../physics/scoring.js';
 import { INCH } from '../physics/units.js';
 import { WEATHER } from '../physics/weather.js';
 import { limbDisplacement } from '../physics/limb.js';
+import { nockDistanceM } from '../physics/bow.js';
 
 const PARTICLES = 1400;
 const RAIN_DROPS = 2600;
@@ -368,7 +369,7 @@ export class RangeScene {
   setDraw(f) {
     if (!this.string) return;
     const brace = this.setup.bow.braceIn * INCH;
-    const draw = this.prep.drawIn * INCH;
+    const draw = nockDistanceM(this.prep.drawIn);
     const z = -(brace + (draw - brace) * f);
     // 引くとリムの先端が射手側 (−z) へしなる
     const bend = -(this.prep.vib?.tipTravel ?? 0) * f;

@@ -29,22 +29,34 @@ test('3.1 引き尺は身長 × 0.38 / 2.54', () => {
   close(drawLengthFromHeight(175), 26.181, 1e-3);
 });
 
-test('3.2 実効ポンドは28インチで表示ポンドに一致し、引き尺に比例して増える', () => {
+test('3.2 実効ポンドは AMO 28インチで表示ポンドに一致し、引き尺とともに増える', () => {
   const bow = defaultSetup().bow;
   close(effectiveLbs(bow, 28), bow.markedLbs, 1e-9);
   assert.ok(effectiveLbs(bow, 27) < effectiveLbs(bow, 28));
-  assert.equal(effectiveLbs(bow, bow.braceIn - 1), 0);
+  assert.equal(effectiveLbs(bow, bow.braceIn + 1.75 - 0.5), 0, 'ブレース位置より手前');
 });
 
-test('4.1 蓄積エネルギーと初速は spec の式どおり', () => {
-  const bow = { ...defaultSetup().bow, markedLbs: 40, braceIn: 8, eta: 0.8, effMassG: 5 };
-  const E = 0.5 * 40 * LBF * (28 - 8) * INCH;
+test('4.1 引き重量曲線が直線 (p=1) なら spec の E = ½·F·(L−BH)、ストロークは AMO の 1.75" を除く', () => {
+  const bow = { ...defaultSetup().bow, markedLbs: 40, braceIn: 8, eta: 0.8, effMassG: 5, curveExp: 1 };
+  const stroke = (28 - 1.75 - 8) * INCH;
+  const E = 0.5 * 40 * LBF * stroke;
   close(storedEnergy(bow, 28), E, 1e-9);
   const m = 350 * GRAIN;
   close(launchSpeed(bow, 28, m), Math.sqrt((2 * 0.8 * E) / (m + 0.005)), 1e-9);
-  // 軽い矢・高ポンド・低いブレースほど速い
+  // 軽い矢・低いブレースほど速い
   assert.ok(launchSpeed(bow, 28, m * 0.8) > launchSpeed(bow, 28, m));
   assert.ok(launchSpeed({ ...bow, braceIn: 7.5 }, 28, m) > launchSpeed(bow, 28, m));
+  // リカーブの曲線 (p<1) は同じピーク重量でも蓄積エネルギーが大きい: E = F·s/(1+p)
+  const rec = { ...bow, curveExp: 0.75 };
+  close(storedEnergy(rec, 28), (40 * LBF * stroke) / 1.75, 1e-9);
+  assert.ok(storedEnergy(rec, 28) > E);
+});
+
+test('4.1 既定のボウ (38lbs) を AMO 28" で引くと、330gr の矢は実測の範囲 (約 175〜195 fps) に入る', () => {
+  const s = defaultSetup();
+  s.player.drawLengthIn = 28;
+  const v0 = prepare(s).v0 / 0.3048;
+  assert.ok(v0 > 175 && v0 < 195, `${v0} fps`);
 });
 
 test('4.2 慣性テンソルは対称・正定値で、スタビが長く重いほど大きい', () => {
@@ -369,4 +381,54 @@ test('リムの振動: 軽い矢ほど大きく、リムダンパーで早く収
   assert.deepEqual(r1.probe.rv, r0.probe.rv);
   assert.ok(Math.abs(v.torqueAmp) > 0, 'ティラー差 (既定 4mm) があればピッチトルク');
   assert.notDeepEqual(r1.final.q, r0.final.q);
+});
+
+test('空力: シャフトの抗力係数は層流 (低 Re) で約 1.6、乱流 (高 Re) で約 2.6 (L/d ≈ 130)', async () => {
+  const { shaftDragCoefficient, turbulentFraction } = await import('../src/physics/arrow.js');
+  close(shaftDragCoefficient(5e3, 130), 1.6, 0.05);
+  close(shaftDragCoefficient(4e4, 130), 2.6, 0.05);
+  assert.ok(turbulentFraction(1.2e4) < 0.2 && turbulentFraction(1.8e4) > 0.8);
+});
+
+test('大気: 15℃・海面・乾燥で 1.225 kg/m³。暑い・高地・湿った空気ほど軽い', async () => {
+  const { airProperties } = await import('../src/physics/atmosphere.js');
+  close(airProperties({ temperatureC: 15, altitudeM: 0, humidity: 0 }).rho, 1.225, 0.002);
+  close(airProperties({ temperatureC: 15, altitudeM: 0, humidity: 0 }).nu, 1.46e-5, 0.02e-5);
+  const base = airProperties({ temperatureC: 20, altitudeM: 0, humidity: 0.5 }).rho;
+  assert.ok(airProperties({ temperatureC: 35, altitudeM: 0, humidity: 0.5 }).rho < base);
+  assert.ok(airProperties({ temperatureC: 20, altitudeM: 1500, humidity: 0.5 }).rho < base * 0.86);
+  assert.ok(airProperties({ temperatureC: 20, altitudeM: 0, humidity: 1 }).rho < base);
+});
+
+test('地球: 重力は赤道 9.780・極 9.832。コリオリは北半球で右へ (70m で数 mm)', async () => {
+  const { gravityAt, coriolis } = await import('../src/physics/atmosphere.js');
+  close(gravityAt(0), 9.7803, 1e-3);
+  close(gravityAt(90), 9.8322, 1e-3);
+  const v = [0, 0, 55];
+  for (const az of [0, 90, 200]) assert.ok(coriolis(35.7, az)(v)[0] > 0, `方位 ${az}° でも右へ`);
+  assert.ok(coriolis(-35, 0)(v)[0] < 0, '南半球では左へ');
+  // 東へ射つと上向き (エトヴェシュ効果)、西へ射つと下向き
+  assert.ok(coriolis(35.7, 90)(v)[1] > 0 && coriolis(35.7, 270)(v)[1] < 0);
+  const s = defaultSetup();
+  s.player.drawLengthIn = 28;
+  s.sight = autoSight(s, prepare(s));   // 的に届くようにサイトを合わせてから比べる
+  const shift = (cor) => {
+    const st = { ...s, environment: { ...s.environment, coriolis: cor } };
+    const p = prepare(st);
+    return shoot(st, p, { noise: false }).dx;
+  };
+  const dx = (shift(undefined) - shift(false)) * 1000;
+  assert.ok(dx > 2 && dx < 8, `${dx} mm`);
+});
+
+test('数値積分: 刻み 0.5ms の RK4 は 0.05ms と着弾点が 0.01mm 以内で一致する (積分誤差は無視できる)', async () => {
+  const { simulateFlight } = await import('../src/physics/ballistics.js');
+  const s = defaultSetup();
+  s.player.drawLengthIn = 28;
+  const p = prepare(s);
+  const wind = createWindField({ speed: 3, directionDeg: 90, refHeight: 2, shearExp: 1 / 7, turbulence: 0.5, lengthScale: 25, timeScale: 4, seed: 7 });
+  const init = { r: [0, 1.45, 0], v: [0, 55 * Math.sin(0.113), 55 * Math.cos(0.113)], d: [0, Math.sin(0.113), Math.cos(0.113)] };
+  const run = (dt) => simulateFlight(init, p.arrow, wind, { targetZ: 69, dt, env: p.flightEnv }).impact.r;
+  const a = run(0.0005), b = run(0.00005);
+  assert.ok(Math.hypot(a[0] - b[0], a[1] - b[1]) < 1e-5);
 });

@@ -288,7 +288,8 @@
         <div>
           <num-field label="リム表示ポンド" unit="lbs" v-model="setup.bow.markedLbs" :step="1" :min="10" :max="60" hint="28インチ引き時の公称ポンド"></num-field>
           <num-field label="ブレースハイト" unit="inch" v-model="setup.bow.braceIn" :step="0.125" :min="6" :max="10"></num-field>
-          <num-field label="効率係数 η" unit="" v-model="setup.bow.eta" :step="0.01" :min="0.6" :max="0.95"></num-field>
+          <num-field label="効率 η (損失を除く)" unit="" v-model="setup.bow.eta" :step="0.01" :min="0.6" :max="1" hint="ヒステリシス・弦の振動・音で失う分を除いた割合。矢への効率は η·m/(m+m_eff)"></num-field>
+          <num-field label="引き重量曲線 p" unit="" v-model="setup.bow.curveExp" :step="0.05" :min="0.4" :max="1.2" hint="F ∝ s^p。1 = 直線 (spec の式)、リカーブは 0.7〜0.8"></num-field>
           <num-field label="等価運動質量 m_eff" unit="g" v-model="setup.bow.effMassG" :step="1" :min="0" :max="40"></num-field>
         </div>
         <div>
@@ -310,7 +311,7 @@
         <div v-if="info" class="text-xs text-slate-400 leading-5 tabular">
           <div class="text-slate-200 mb-1">4.1 初速モデル</div>
           <div>引き尺 {{ fmt(info.drawIn, 2) }}" → 実効 {{ fmt(info.lbs) }} lbs</div>
-          <div>蓄積エネルギー E = ½·F·(L−BH) = {{ fmt(info.energy) }} J</div>
+          <div>蓄積エネルギー E = F·s/(1+p) = {{ fmt(info.energy) }} J (s = 引き尺 − 1.75" − BH)</div>
           <div>初速 v₀ = {{ fmt(info.v0) }} m/s ({{ fmt(info.v0 / 0.3048, 0) }} fps)</div>
           <div class="mt-1">ボウ総質量 {{ fmt(info.bowMass, 2) }} kg</div>
           <div class="text-slate-200 mt-2 mb-1">リムの振動 (矢が離れた後)</div>
@@ -397,7 +398,7 @@
         <div v-if="info" class="text-xs text-slate-400 leading-5 tabular">
           <div class="text-slate-200 mb-1">質量・空力</div>
           <div>質量 {{ fmt(info.arrowG, 2) }} g / FOC {{ fmt(info.foc) }} %</div>
-          <div>抗力係数 C_D {{ fmt(info.cd, 2) }} (断面積基準)</div>
+          <div>抗力係数 C_D 層流 {{ fmt(info.cdLam, 2) }} / 乱流 {{ fmt(info.cdTurb, 2) }} (断面積基準・ベイン込み。Re ≈ 1.5×10⁴ で遷移)</div>
           <div :class="info.stable ? '' : 'text-rose-400'">{{ info.stable ? '風見安定: 良好' : '風見安定: 不安定 (重心が後ろすぎ)' }}</div>
           <div v-for="w in info.warnings" class="text-amber-400">{{ w }}</div>
         </div>
@@ -449,6 +450,13 @@
           <num-field label="乱流の空間スケール" unit="m" v-model="setup.environment.lengthScale" :step="5"></num-field>
           <num-field label="乱流の時間スケール" unit="s" v-model="setup.environment.timeScale" :step="0.5"></num-field>
           <num-field label="乱数シード" unit="" v-model="setup.environment.seed" :step="1"></num-field>
+          <div class="text-xs text-slate-400 mt-2 mb-1">大気・地球</div>
+          <num-field label="気温" unit="℃" v-model="setup.environment.temperatureC" :step="1" :min="-30" :max="50"></num-field>
+          <num-field label="標高" unit="m" v-model="setup.environment.altitudeM" :step="50" :min="-400" :max="5000"></num-field>
+          <num-field label="湿度" unit="0〜1" v-model="setup.environment.humidity" :step="0.05" :min="0" :max="1"></num-field>
+          <num-field label="緯度" unit="°" v-model="setup.environment.latitudeDeg" :step="1" :min="-90" :max="90" hint="重力加速度とコリオリ力に効く"></num-field>
+          <num-field label="的の方位 (北=0)" unit="°" v-model="setup.environment.rangeAzimuthDeg" :step="15" hint="コリオリ力の向きに効く"></num-field>
+          <div v-if="info?.air" class="text-[11px] text-slate-500 tabular">空気密度 {{ fmt(info.air.rho, 3) }} kg/m³ / 重力 {{ fmt(info.g, 4) }} m/s²</div>
         </div>
         </fieldset>
       </div>

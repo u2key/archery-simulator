@@ -44,8 +44,10 @@ export function defaultSetup() {
       rest: 'Metal',
       clickerOffsetMm: 0,  // クリッカー位置 (自然な引き尺からのズレ。+ で引き過ぎ側)
       nockingMm: 10,       // ノッキングポイント高さ (直角位置から上へ)
-      eta: 0.82,           // 効率係数 η (spec: 0.75〜0.85)
-      effMassG: 4,         // リム・弦の等価運動質量 m_eff [g]
+      // 効率: 矢の運動エネルギー / 蓄積エネルギー = η · m / (m + m_eff)。既定値で 10 gpp のとき約 0.78
+      eta: 0.91,           // ヒステリシス・弦の振動・音を除いた効率 η
+      effMassG: 4,         // リム・弦の等価運動質量 (仮想質量) m_eff [g]
+      curveExp: 0.75,      // 引き重量曲線の形 F ∝ s^p (1 = 直線。リカーブは 0.7〜0.8 程度)
       riserMassG: 1250,
       limbMassG: 160,      // 片側
       sightMassG: 120,
@@ -80,6 +82,12 @@ export function defaultSetup() {
       lengthScale: 25,
       timeScale: 4,
       seed: 7,
+      // 大気と地球 (弾道の精度に効く): 気温・標高・湿度 → 空気密度と粘性、緯度・標高 → 重力、緯度・的の方位 → コリオリ
+      temperatureC: 20,
+      altitudeM: 40,
+      humidity: 0.6,       // 相対湿度 (0〜1)
+      latitudeDeg: 35.7,   // 東京
+      rangeAzimuthDeg: 0,  // 的の方位 (北 = 0、東 = 90)
       weather: 'random',   // random: 晴れ・くもり・雨・雷雨が移り変わる / clear: 晴れ固定
     },
     sight: {

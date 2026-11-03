@@ -184,7 +184,8 @@ const App = {
         arrowG: a.mass * 1000, foc: a.foc * 100, f: a.fSpine, EI: a.EI, req: a.requiredSpine, dyn: a.dynamicSpine,
         mismatch: a.mismatch, eff: a.effMismatch, cd: a.cd, A0: a.paradox.A0 * 1000, gamma: a.paradox.gamma,
         I: prep.I, cDamp: prep.cDamp, bowMass: prep.model.mass, cg: prep.model.cg, warnings: a.warnings, stable: a.stable,
-        face: prep.face, vib: prep.vib,
+        face: prep.face, vib: prep.vib, air: prep.flightEnv.air, g: prep.flightEnv.g,
+        cdLam: a.cdLaminar, cdTurb: a.cdTurbulent,
       };
       const ideal = shoot(s, prep, { noise: false });
       predicted = ideal.flight.reached ? { x: ideal.dx, y: ideal.dy } : null;
