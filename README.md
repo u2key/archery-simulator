@@ -8,7 +8,7 @@
 
 ```sh
 npm install
-npm start            # 試合サーバー (静的配信 + WebSocket) → http://localhost:8000/
+npm start            # 試合サーバー (静的配信 + WebSocket) → http://localhost:25250/
 ```
 
 `PORT=9000 npm start` でポートを変えられます。`?room=名前` を URL に付けると別のルームで試合できます (既定は `main`)。

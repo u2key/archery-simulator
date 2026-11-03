@@ -1,5 +1,5 @@
 // 静的ファイル配信 + オンライン試合用 WebSocket サーバー。
-//   npm start          → http://localhost:8000/   (PORT 環境変数で変更可)
+//   npm start          → http://localhost:25250/   (PORT 環境変数で変更可)
 //   ?room=名前 を付けると別のルームで試合できる (既定は main)
 import http from 'node:http';
 import fs from 'node:fs/promises';
@@ -9,7 +9,7 @@ import { WebSocketServer } from 'ws';
 import { Room } from './room.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const PORT = Number(process.env.PORT) || 8000;
+const PORT = Number(process.env.PORT) || 25250;
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
