@@ -13,6 +13,26 @@ npm start            # 試合サーバー (静的配信 + WebSocket) → http://
 
 `PORT=9000 npm start` でポートを変えられます。`?room=名前` を URL に付けると別のルームで試合できます (既定は `main`)。
 
+### リバースプロキシ (Nginx) の下に置く場合
+
+`/archery/` のようなサブパスでも動きます (画面は相対パスで読み込み、WebSocket もページと同じディレクトリの `ws` に繋ぎます)。
+Nginx では WebSocket のための `Upgrade` / `Connection` ヘッダの転送が必要です。これがないと画面は出ても試合サーバーに繋がりません (オフライン表示になります)。
+
+```nginx
+# http { } の中
+map $http_upgrade $connection_upgrade { default upgrade; '' close; }
+
+# server { } の中
+location /archery/ {
+    proxy_pass http://127.0.0.1:25250/;      # 末尾の / でプレフィックスを外して転送 (外さずに転送しても動く)
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_set_header Host $host;
+    proxy_read_timeout 1h;                    # 試合中の長い接続を切らない
+}
+```
+
 Three.js・Vue・Tailwind は CDN (jsdelivr / cdn.tailwindcss.com) から読み込むので、ネットワーク接続が必要です。
 サーバーなしの静的配信 (`npm run serve`) でも開けますが、その場合はプラクティスだけになります。
 

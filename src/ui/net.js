@@ -25,7 +25,11 @@ function playerId() {
 export function connectMatchServer(h) {
   const id = playerId();
   const room = new URLSearchParams(location.search).get('room') || 'main';
-  const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?room=${encodeURIComponent(room)}`;
+  // ページと同じディレクトリの ws に繋ぐ (リバースプロキシで /archery-simulator/ などの下に置いても届くように)
+  const wsUrl = new URL('ws', new URL('.', location.href));
+  wsUrl.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  wsUrl.search = `?room=${encodeURIComponent(room)}`;
+  const url = wsUrl.href;
   let ws = null, retry = 1000, closed = false;
 
   function open() {

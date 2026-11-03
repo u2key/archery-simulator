@@ -15,24 +15,38 @@ const TYPES = {
   '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
 };
 
-// 配信するのは画面 (index.html) とブラウザ用のモジュール (src/) だけ
-async function serveStatic(req, res) {
-  const url = new URL(req.url, 'http://x');
-  let rel = decodeURIComponent(url.pathname);
-  if (rel === '/') rel = '/index.html';
+// 配信するのは画面 (index.html) とブラウザ用のモジュール (src/) だけ。
+// リバースプロキシで /archery-simulator/ などの下に置かれ、そのパスのまま転送されてくる場合にも対応するため、
+// 先頭のディレクトリを 1 つ外したパスも試す (/archery-simulator/src/ui/app.js → /src/ui/app.js)。
+function resolveStatic(pathname) {
+  let rel = pathname;
+  if (rel.endsWith('/')) rel += 'index.html';
   const file = path.resolve(ROOT, '.' + rel);
   const allowed = file === path.join(ROOT, 'index.html') || file.startsWith(path.join(ROOT, 'src') + path.sep);
-  if (!allowed) {
-    res.writeHead(404).end('Not found');
+  return allowed ? file : null;
+}
+
+async function serveStatic(req, res) {
+  const url = new URL(req.url, 'http://x');
+  let pathname;
+  try { pathname = decodeURIComponent(url.pathname); } catch { pathname = '/'; }
+  // /archery-simulator (末尾のスラッシュなし) は相対パスが狂うので / 付きへ転送する
+  if (/^\/[^/.]+$/.test(pathname)) {
+    res.writeHead(301, { Location: `${pathname}/${url.search}` }).end();
     return;
   }
-  try {
-    const body = await fs.readFile(file);
-    res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': 'no-cache' });
-    res.end(body);
-  } catch {
-    res.writeHead(404).end('Not found');
+  const candidates = [pathname, pathname.replace(/^\/[^/]+/, '') || '/'];
+  for (const p of candidates) {
+    const file = resolveStatic(p);
+    if (!file) continue;
+    try {
+      const body = await fs.readFile(file);
+      res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': 'no-cache' });
+      res.end(body);
+      return;
+    } catch { /* 次の候補へ */ }
   }
+  res.writeHead(404).end('Not found');
 }
 
 const server = http.createServer((req, res) => {
@@ -40,7 +54,16 @@ const server = http.createServer((req, res) => {
 });
 
 const rooms = new Map();        // ルーム名 → { room, sockets: Map<playerId, ws> }
-const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 16 * 1024 });
+// WebSocket は末尾が /ws のパスならどこでも受ける (/ws でも /archery-simulator/ws でも)
+const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 });
+server.on('upgrade', (req, socket, head) => {
+  const { pathname } = new URL(req.url, 'http://x');
+  if (!pathname.endsWith('/ws')) {
+    socket.destroy();
+    return;
+  }
+  wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+});
 
 function broadcast(entry) {
   for (const [pid, ws] of entry.sockets) {
