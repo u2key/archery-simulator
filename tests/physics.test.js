@@ -502,3 +502,22 @@ test('ベインの空力 (翼理論): 揚力傾斜は細長翼の範囲、自転
   assert.ok(tau > 0.005 && tau < 0.1, `tau ${tau}`);
   assert.ok(a.stable && a.staticMargin > 0);
 });
+
+test('照準の揺れ: 振戦と心拍は慣性に反比例、ドリフトは 1/√I。リリースのトルクは引き重量に比例する', () => {
+  const s = defaultSetup();
+  const heavy = defaultSetup();
+  heavy.stabilizer.center.tipOz = 8;
+  heavy.stabilizer.side.tipOz = 10;
+  const a = prepare(s).swaySigma, b = prepare(heavy).swaySigma;
+  const pa = prepare(s), pb = prepare(heavy);
+  const Ia = pa.I[0][0] + 0.12, Ib = pb.I[0][0] + 0.12;
+  close(a.tremorElev / b.tremorElev, Ib / Ia, 1e-9);
+  close(a.heartElev / b.heartElev, Ib / Ia, 1e-9);
+  close(a.elev / b.elev, Math.sqrt(Ib / Ia), 1e-9);
+  // 強いボウほどリリースで同じ押し点のずれから大きなトルク (弓の跳ねが大きい)
+  const strong = defaultSetup();
+  strong.bow.markedLbs = 48;
+  const t1 = shoot(s, prepare(s), { noise: false }).torque0[0];
+  const t2 = shoot(strong, prepare(strong), { noise: false }).torque0[0];
+  close(t2 / t1, effectiveLbs(strong.bow, prepare(strong).drawIn) / effectiveLbs(s.bow, prepare(s).drawIn), 1e-9);
+});

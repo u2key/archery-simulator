@@ -20,10 +20,22 @@ import { aimAngles, applyCorrection, EYE_ABOVE_ARROW } from './sight.js';
 import { scoreArrow, faceDiameterCm, TARGET_CENTER_HEIGHT } from './scoring.js';
 
 // 揺れの基準とする慣性モーメント (既定セットアップの値) [kg·m²]
-const I_REF = { pitch: 0.308, yaw: 0.145 };
-const SWAY_MRAD = 0.85;          // skill=1, I=I_REF での照準揺れ (各軸の標準偏差)
-const HEARTBEAT_MRAD = 0.12;     // 心拍による揺れの振幅 (72 bpm 時)
-const RELEASE_TORQUE_SIGMA = 3.0;  // リリース時の手のトルクのばらつき [N·m] (skill=1)
+// ---- 照準の揺れ (3 つの物理的な成分。I は弓手の腕を含むボウの慣性モーメント) ----
+// ・姿勢のドリフト (2 Hz 以下): 体幹・肩の制御の揺らぎ。慣性が大きいと遅く小さくなる (∝ 1/√I)
+// ・筋肉の振戦 (約 10 Hz): 振戦トルク τ が腕とボウを揺する。共振より十分速いので振幅 ≈ τ / (I ω²) (∝ 1/I)
+// ・心拍: 拍ごとの角力積 J で腕とボウの振り子 (約 2 Hz) が揺れる。振幅 ≈ J / (I ω_n) (∝ 1/I)
+const I_REF = { pitch: 0.308, yaw: 0.145 };   // ドリフトの基準 (既定のセットアップ)
+const DRIFT_MRAD = 0.75;          // skill=1, I=I_REF での姿勢ドリフト (各軸の標準偏差)
+const TREMOR_TORQUE = 0.45;       // skill=1 の振戦トルク (実効値) [N·m]
+const TREMOR_HZ = 10;
+const HEART_IMPULSE = 0.0008;     // 心拍 1 回の角力積 [N·m·s] (72 bpm, skill=1)
+const ARM_HZ = 2.2, ARM_ZETA = 0.25;   // 腕とボウの振り子の固有振動数と減衰比
+// ---- リリースのトルク: 引き重量 × (グリップの押し点と弦の力の作用線のずれ) ----
+// 矢 (ノック) はピボットより 3cm 上、押し点は約 1cm 上。ティラーは作用線を上下に動かす。
+const NOCK_ABOVE_PIVOT = 0.03, PRESSURE_POINT = 0.01;
+const TILLER_LINE = 0.0006;       // ティラー 1mm あたりの作用線の移動 [m]
+const GRIP_SIGMA_V = 0.005, GRIP_SIGMA_H = 0.004;   // 押し点の上下・左右のばらつき [m] (skill=1)
+const GRIP_TWIST_SIGMA = 0.15;    // グリップのねじり (ロール) [N·m] (skill=1)
 const BOW_TO_ARROW = 0.6;        // 矢が離れる瞬間のボウの傾きのうち矢の向きに伝わる割合
 // 指離れ (右利き): 弦は指先から外れるとき左 (−x) へ弾かれる。平均と、上手さ (skill) に比例するばらつき [m/s]
 const RELEASE_KICK = -1.2;
@@ -66,10 +78,16 @@ export function prepare(setup) {
   const D = setup.environment.distance + lineZ;
   const eyeElev = Math.atan2(TARGET_CENTER_HEIGHT - eye[1], D - eye[2]);
   const skill = setup.player.skill;
+  // 腕ごと揺れるので、腕の慣性を足した実効慣性モーメントで考える
+  const Ip = I[0][0] + HAND_INERTIA[0], Iy = I[1][1] + HAND_INERTIA[1];
+  const wT = 2 * Math.PI * TREMOR_HZ, wA = 2 * Math.PI * ARM_HZ;
   const swaySigma = {
-    // 腕ごと揺れるので、腕の慣性を足した実効慣性モーメントの平方根に反比例させる
-    elev: skill * SWAY_MRAD * MRAD * Math.sqrt((I_REF.pitch + HAND_INERTIA[0]) / (I[0][0] + HAND_INERTIA[0])),
-    azim: skill * SWAY_MRAD * MRAD * Math.sqrt((I_REF.yaw + HAND_INERTIA[1]) / (I[1][1] + HAND_INERTIA[1])),
+    elev: skill * DRIFT_MRAD * MRAD * Math.sqrt((I_REF.pitch + HAND_INERTIA[0]) / Ip),
+    azim: skill * DRIFT_MRAD * MRAD * Math.sqrt((I_REF.yaw + HAND_INERTIA[1]) / Iy),
+    tremorElev: (skill * TREMOR_TORQUE) / (Ip * wT * wT),
+    tremorAzim: (skill * TREMOR_TORQUE) / (Iy * wT * wT),
+    heartElev: (skill * HEART_IMPULSE) / (Ip * wA),
+    heartAzim: (0.3 * skill * HEART_IMPULSE) / (Iy * wA),
   };
   return {
     drawIn, lbs, arrow, model, I, cDamp, v0, hArrow, eye, eyeElev, swaySigma, D, lineZ,
@@ -103,12 +121,17 @@ export function paradoxLaunch(setup, prep, ps, o = {}) {
 /** 時刻 t における照準の揺れ [rad]。3D ビューの照準表示と射撃結果の両方がこの関数を使う。 */
 export function aimSway(setup, prep, t) {
   const n = prep.swayNoise;
+  const sg = prep.swaySigma;
   const slow = (k) => (n(t * 0.55, k, 0, 0) + 0.5 * n(t * 1.7, k + 10, 0, 0)) / NOISE_STD;
-  const hb = HEARTBEAT_MRAD * MRAD * setup.player.skill * (setup.player.heartRate / 72);
-  const beat = Math.sin(2 * Math.PI * (setup.player.heartRate / 60) * t);
+  const tremor = (k) => n(t * TREMOR_HZ, k + 20, 3, 0) / 0.28;
+  // 心拍: 直近の拍からの経過時間 τ で、腕とボウの振り子の減衰振動 e^{−ζωτ} sin(ω_d τ)。心拍が速いほど強く打つ
+  const period = 60 / setup.player.heartRate;
+  const tau = ((t % period) + period) % period;
+  const wA = 2 * Math.PI * ARM_HZ;
+  const ring = Math.exp(-ARM_ZETA * wA * tau) * Math.sin(wA * Math.sqrt(1 - ARM_ZETA ** 2) * tau) * (setup.player.heartRate / 72);
   return {
-    elev: prep.swaySigma.elev * slow(1) + hb * beat,
-    azim: prep.swaySigma.azim * slow(2) + 0.3 * hb * beat,
+    elev: sg.elev * slow(1) + sg.tremorElev * tremor(1) + sg.heartElev * ring,
+    azim: sg.azim * slow(2) + sg.tremorAzim * tremor(2) + sg.heartAzim * ring,
   };
 }
 
@@ -144,15 +167,13 @@ export function shoot(setup, prep, o = {}) {
   const v0 = ps.v0;
   const tExit = ps.tExit;
 
-  // 4.2: リリース瞬間のトルク。ティラーずれ・センターずれで系統的な成分が、手の力みでランダム成分が加わる。
+  // 4.2: リリース瞬間のトルク = 引き重量 × (弦の力の作用線と、弓手の押し点のずれ)。
+  //   上下: ノックの高さ − 押し点 + ティラーによる作用線の移動 + 押し方のばらつき
+  //   左右: センターショットのずれ (弦の面と矢の線) + 押し方のばらつき
   const F = effectiveLbs(bow, drawIn) * LBF;
-  const tuneSpread = 1 + 0.1 * Math.abs(bow.tillerMm - TILLER_OPT_MM);
-  const ts = RELEASE_TORQUE_SIGMA * player.skill * tuneSpread;
-  const torque0 = [
-    F * (0.02 + 0.0006 * (bow.tillerMm - TILLER_OPT_MM)) + N(ts),
-    F * bow.plungerOffsetMm * 3e-4 + N(ts),
-    N(0.3 * ts),
-  ];
+  const eV = NOCK_ABOVE_PIVOT - PRESSURE_POINT + TILLER_LINE * (bow.tillerMm - TILLER_OPT_MM) + N(GRIP_SIGMA_V * player.skill);
+  const eH = -(bow.plungerOffsetMm / 1000) * 0.3 + N(GRIP_SIGMA_H * player.skill);
+  const torque0 = [F * eV, F * eH, N(GRIP_TWIST_SIGMA * player.skill)];
   // リムの振動: 矢が離れた瞬間 (tExit) から始まり、上下の振幅差がハンドルを揺する
   const limbVib = limbVibration(bow, setup.stabilizer, drawIn, arrow.mass, prep.model.mass, prep.bowModel, v0);
   const motion = simulateBowRelease(prep.model, prep.I, {
