@@ -182,13 +182,17 @@ const App = {
         drawIn: prep.drawIn, lbs: prep.lbs, energy: prep.energy, v0: prep.v0, tExit: prep.stroke.tExit,
         efficiency: (0.5 * prep.arrow.mass * prep.v0 ** 2) / prep.energy, tension: prep.bowTension,
         arrowG: a.mass * 1000, foc: a.foc * 100, f: a.fSpine, EI: a.EI, req: a.requiredSpine, dyn: a.dynamicSpine,
-        mismatch: a.mismatch, eff: a.effMismatch, cd: a.cd, A0: a.paradox.A0 * 1000, gamma: a.paradox.gamma,
+        mismatch: a.mismatch, cd: a.cd, gamma: a.paradox.gamma,
         I: prep.I, cDamp: prep.cDamp, bowMass: prep.model.mass, cg: prep.model.cg, warnings: a.warnings, stable: a.stable,
         face: prep.face, vib: prep.vib, air: prep.flightEnv.air, g: prep.flightEnv.g,
         cdLam: a.cdLaminar, cdTurb: a.cdTurbulent,
       };
       const ideal = shoot(s, prep, { noise: false });
       predicted = ideal.flight.reached ? { x: ideal.dx, y: ideal.dy } : null;
+      info.value.fe = {
+        azim: ideal.parts.paradox.azim * 1000, angle: (ideal.paradoxAngle - ideal.parts.paradox.azim) * 1000,
+        A0: ideal.paradox.A0 * 1000, plunger: ideal.plungerForceMax,
+      };
       if (scene) {
         // 的の z はライン位置 (=引き尺) にも依存するので、D が変わったら射場を作り直す
         if (full || scene.distance !== prep.D) scene.setRange(prep);

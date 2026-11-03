@@ -644,7 +644,7 @@ export class RangeScene {
     f.mesh.position.copy(pos);
     f.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
     // 4.3 アーチャーズ・パラドックス: 自由-自由梁1次モード形状 (両端と中央が逆位相) で横にしならせる
-    const ys = paradoxDeflection(this.prep.arrow.paradox, Math.min(t, f.result.flightTime)) * exaggerate;
+    const ys = paradoxDeflection(f.result.paradox ?? this.prep.arrow.paradox, Math.min(t, f.result.flightTime)) * exaggerate;
     for (const seg of f.mesh.userData.segments) {
       seg.position.x = ys * Math.cos(2 * Math.PI * seg.userData.s);
     }

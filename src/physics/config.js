@@ -41,6 +41,7 @@ export function defaultSetup() {
       tillerMm: 4,         // ティラー差 (上 − 下)
       plungerOffsetMm: 0,  // プランジャー突き出し量 (センターショット基準からのズレ)
       plungerK: 800,       // プランジャーバネ定数 [N/m]
+      plungerPreloadN: 2,  // プランジャーの予圧 (テンション) [N]: これを超えるまでプランジャーは引っ込まない
       rest: 'Metal',
       clickerOffsetMm: 0,  // クリッカー位置 (自然な引き尺からのズレ。+ で引き過ぎ側)
       nockingMm: 10,       // ノッキングポイント高さ (直角位置から上へ)

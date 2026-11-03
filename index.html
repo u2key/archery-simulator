@@ -306,6 +306,7 @@
         <div>
           <num-field label="プランジャー突き出し" unit="mm" v-model="setup.bow.plungerOffsetMm" :step="0.25" hint="センターショットからのずれ (+で左へ向く)"></num-field>
           <num-field label="プランジャーばね k_p" unit="N/m" v-model="setup.bow.plungerK" :step="50" :min="200" :max="3000"></num-field>
+          <num-field label="プランジャー予圧 (テンション)" unit="N" v-model="setup.bow.plungerPreloadN" :step="0.25" :min="0.25" :max="8" hint="この力を超えるまでプランジャーは引っ込まない。上げると弱い矢が左へ"></num-field>
           <num-field label="ハンドル質量" unit="g" v-model="setup.bow.riserMassG" :step="10"></num-field>
           <num-field label="リム質量 (片側)" unit="g" v-model="setup.bow.limbMassG" :step="5"></num-field>
           <num-field label="サイト質量" unit="g" v-model="setup.bow.sightMassG" :step="5"></num-field>
@@ -408,10 +409,15 @@
         <div v-if="info" class="text-xs text-slate-400 leading-5 tabular">
           <div class="text-slate-200 mb-1">4.3 アーチャーズ・パラドックス</div>
           <div>EI {{ fmt(info.EI, 2) }} N·m² / f_spine {{ fmt(info.f, 1) }} Hz</div>
-          <div>必要スパイン目安 {{ fmt(info.req, 0) }} / 動的 {{ fmt(info.dyn, 0) }}
+          <div>スパイン表の目安 {{ fmt(info.req, 0) }} (参考)
             <span :class="Math.abs(info.mismatch) > 0.12 ? 'text-amber-300' : 'text-emerald-300'">({{ mismatchLabel(info.mismatch) }} {{ fmt(info.mismatch * 100, 0) }}%)</span></div>
-          <div>プランジャー補正後のずれ {{ fmt(info.eff * 100, 0) }}%</div>
-          <div>初期振幅 A₀ {{ fmt(info.A0, 2) }} mm / 減衰 γ {{ info.gamma }} 1/s</div>
+          <template v-if="info.fe">
+            <div class="text-slate-300 mt-1">有限要素で解いた発射 (理想射)</div>
+            <div>左右の発射方向 {{ fmt(info.fe.azim, 2) }} mrad / 軸のずれ {{ fmt(info.fe.angle, 2) }} mrad</div>
+            <div>離れた後のしなり ±{{ fmt(info.fe.A0, 2) }} mm / 減衰 γ {{ info.gamma }} 1/s</div>
+            <div>プランジャーの最大荷重 {{ fmt(info.fe.plunger, 1) }} N</div>
+            <div class="text-[11px] text-slate-500">指離れ・弦・プランジャー・ボウの回転と矢のしなりから計算。弱い矢・重いポイントほど右、プランジャーの予圧を上げると左</div>
+          </template>
         </div>
       </div>
 

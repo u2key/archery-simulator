@@ -5,11 +5,15 @@ import { createNoise4D } from './simplex.js';
 import { REST_FRICTION } from './config.js';
 import {
   drawLengthIn, effectiveLbs, launchSpeed, nockDistanceM, strokeIn, bowMassModel, inertiaTensor, dampingCoefficient, simulateBowRelease, HAND_INERTIA,
+  rotationVector,
 } from './bow.js';
 import { arrowProperties } from './arrow.js';
 import { limbVibration, vibrationTorque } from './limb.js';
 import { airProperties, gravityAt, coriolis } from './atmosphere.js';
 import { buildBowModel, powerStroke, potential, stringTension } from './bowdynamics.js';
+import { buildArrowBeam, simulateParadox } from './paradox.js';
+import { VANE_MATERIALS } from './config.js';
+import { GRAIN } from './units.js';
 import { simulateFlight } from './ballistics.js';
 import { calmWind } from './wind.js';
 import { aimAngles, applyCorrection, EYE_ABOVE_ARROW } from './sight.js';
@@ -21,7 +25,11 @@ const SWAY_MRAD = 0.85;          // skill=1, I=I_REF での照準揺れ (各軸�
 const HEARTBEAT_MRAD = 0.12;     // 心拍による揺れの振幅 (72 bpm 時)
 const RELEASE_TORQUE_SIGMA = 3.0;  // リリース時の手のトルクのばらつき [N·m] (skill=1)
 const BOW_TO_ARROW = 0.6;        // 矢が離れる瞬間のボウの傾きのうち矢の向きに伝わる割合
-const SPINE_YAW_MRAD = 4;        // スパイン不一致 100% あたりの左右偏差
+// 指離れ (右利き): 弦は指先から外れるとき左 (−x) へ弾かれる。平均と、上手さ (skill) に比例するばらつき [m/s]
+const RELEASE_KICK = -1.2;
+const RELEASE_KICK_SIGMA = 0.25;
+// センターショット: 矢の先端を弦より少し外 (左) に出すのが基準。plungerOffsetMm はそこからのずれ
+const CENTERSHOT_MM = 2;
 const NOCK_OPT_MM = 10, TILLER_OPT_MM = 4;
 const RAIN_MRAD = 0.7;           // 雨 (強さ 1) による発射方向のばらつき (各軸の標準偏差)
 const NOISE_STD = 0.28 * Math.hypot(1, 0.5);
@@ -66,12 +74,30 @@ export function prepare(setup) {
   return {
     drawIn, lbs, arrow, model, I, cDamp, v0, hArrow, eye, eyeElev, swaySigma, D, lineZ,
     bowModel, stroke, energy: potential(bowModel, nockDistanceM(drawIn)),
+    beam: buildArrowBeam(arrow, setup.arrow.pointGrain * GRAIN, VANE_MATERIALS[setup.arrow.vaneMaterial].rearGrain * GRAIN),
     bowTension: { brace: stringTension(bowModel, bowModel.g.sB), full: stringTension(bowModel, nockDistanceM(drawIn)) },
     vib: limbVibration(setup.bow, setup.stabilizer, drawIn, arrow.mass, model.mass, bowModel, v0),
     flightEnv: flightEnvironment(setup.environment),
     face: faceDiameterCm(setup.environment.distance),
     swayNoise: createNoise4D(setup.environment.seed + 101),
   };
+}
+
+/**
+ * パラドックスの有限要素計算 (水平面) を、セットアップとパワーストロークから組み立てて解く
+ * @param {object} ps  powerStroke の結果
+ * @param {{ releaseVel?: number, yaw?: (t:number) => number }} o  指離れの横速度 (既定は平均)、ボウのヨー
+ */
+export function paradoxLaunch(setup, prep, ps, o = {}) {
+  const { bow } = setup;
+  const arrow = prep.arrow;
+  return simulateParadox(prep.beam, {
+    stroke: ps.samples, tExit: ps.tExit, v0: ps.v0, sBrace: prep.bowModel.g.sB,
+    tension: (x) => stringTension(prep.bowModel, x), ell: prep.bowModel.g.ell, stringLatMass: (bow.stringMassG ?? 8) / 3000,
+    releaseVel: o.releaseVel ?? RELEASE_KICK, yaw: o.yaw ?? (() => 0),
+    plungerK: bow.plungerK, plungerPreload: bow.plungerPreloadN ?? 2,
+    plungerX: -(CENTERSHOT_MM + bow.plungerOffsetMm) / 1000, gamma: arrow.paradox.gamma, fSpine: arrow.fSpine,
+  });
 }
 
 /** 時刻 t における照準の揺れ [rad]。3D ビューの照準表示と射撃結果の両方がこの関数を使う。 */
@@ -120,7 +146,7 @@ export function shoot(setup, prep, o = {}) {
 
   // 4.2: リリース瞬間のトルク。ティラーずれ・センターずれで系統的な成分が、手の力みでランダム成分が加わる。
   const F = effectiveLbs(bow, drawIn) * LBF;
-  const tuneSpread = 1 + 1.5 * Math.abs(arrow.effMismatch) + 0.1 * Math.abs(bow.tillerMm - TILLER_OPT_MM);
+  const tuneSpread = 1 + 0.1 * Math.abs(bow.tillerMm - TILLER_OPT_MM);
   const ts = RELEASE_TORQUE_SIGMA * player.skill * tuneSpread;
   const torque0 = [
     F * (0.02 + 0.0006 * (bow.tillerMm - TILLER_OPT_MM)) + N(ts),
@@ -135,15 +161,32 @@ export function shoot(setup, prep, o = {}) {
   });
   const rv = motion.probe.rv;
 
+  // 4.3 アーチャーズ・パラドックス (水平面): 指離れ・弦・プランジャー・ボウのヨーと矢のしなりを有限要素で解く
+  const fine = simulateBowRelease(prep.model, prep.I, {
+    torque0, cDamp: prep.cDamp, duration: tExit + 0.012, sampleEvery: 0.0005,
+    extraTorque: (t) => [vibrationTorque(limbVib, t - tExit), 0, 0],
+  }).samples.map((x) => ({ t: x.t, yaw: rotationVector(x.q)[1] }));
+  const yawAt = (t) => {
+    let i = 0;
+    while (i < fine.length - 2 && fine[i + 1].t < t) i++;
+    const A = fine[i], B = fine[Math.min(i + 1, fine.length - 1)];
+    return B.t > A.t ? A.yaw + ((B.yaw - A.yaw) * (t - A.t)) / (B.t - A.t) : A.yaw;
+  };
+  const releaseVel = RELEASE_KICK + N(RELEASE_KICK_SIGMA * player.skill);
+  const fe = paradoxLaunch(setup, prep, ps, { releaseVel, yaw: yawAt });
+  const paradox = { A0: fe.flex.A0, gamma: arrow.paradox.gamma, f: arrow.fSpine, phase: fe.flex.phase };
+
   const sway = !noise ? { elev: 0, azim: 0 } : (o.sway ?? aimSway(setup, prep, time));
   const aim = aimAngles(setup.sight, prep.eyeElev);
   const parts = {
     sway,
-    bowKick: { elev: -BOW_TO_ARROW * rv[0], azim: BOW_TO_ARROW * rv[1] },
+    // 上下はボウのピッチの一部が矢に伝わる。左右 (ヨー) の影響はパラドックスの計算に含まれる
+    bowKick: { elev: -BOW_TO_ARROW * rv[0], azim: 0 },
     tuning: {
       elev: -0.4 * MRAD * (bow.tillerMm - TILLER_OPT_MM) - 0.2 * MRAD * (bow.nockingMm - NOCK_OPT_MM),
-      azim: SPINE_YAW_MRAD * MRAD * arrow.effMismatch - (bow.plungerOffsetMm / 1000) / 1.2,
+      azim: 0,
     },
+    paradox: { elev: 0, azim: fe.vCg / v0 },
     rest: { elev: N(1.2 * mu * MRAD), azim: N(2.5 * mu * MRAD) },
   };
   const rain = o.rain ?? 0;
@@ -156,9 +199,11 @@ export function shoot(setup, prep, o = {}) {
   const dir = dirFromAngles(elev, azim);
   // ノッキングポイントのずれは矢の姿勢 (機首の上下) のずれとして発射時に残る
   const attitudePitch = -((bow.nockingMm - NOCK_OPT_MM) / 1000) / (0.5 * arrow.L);
-  const axis = dirFromAngles(elev + attitudePitch, azim);
+  // 矢の軸の向きは飛ぶ向きと少しずれて出る (パラドックスの剛体回転)。首振りの角速度も引き継ぐ
+  const axis = dirFromAngles(elev + attitudePitch, azim + (fe.angle - fe.vCg / v0));
+  const flightArrow = { ...arrow, paradox };
 
-  const flight = simulateFlight({ r: [0, prep.hArrow, 0], v: dir.map((c) => c * v0), d: axis }, arrow, wind, {
+  const flight = simulateFlight({ r: [0, prep.hArrow, 0], v: dir.map((c) => c * v0), d: axis, w: [0, fe.omega, 0] }, flightArrow, wind, {
     targetZ: prep.D, t0: time, recordEvery: o.recordEvery ?? 0.004, env: prep.flightEnv,
   });
   const dx = flight.impact.r[0];
@@ -166,7 +211,8 @@ export function shoot(setup, prep, o = {}) {
   const score = flight.reached ? scoreArrow(Math.hypot(dx, dy), prep.face, arrow.r) : { value: 0, label: 'M', x: false };
 
   return {
-    v0, drawIn, tExit, elev, azim, parts, torque0, limbVib,
+    v0, drawIn, tExit, elev, azim, parts, torque0, limbVib, paradox,
+    plungerForceMax: fe.plungerForceMax, releaseVel, paradoxAngle: fe.angle,
     flight, dx, dy, score,
     bowMotion: o.bowMotion ? motion.samples : null,
     impactSpeed: flight.reached ? Math.hypot(...flight.impact.v) : 0,

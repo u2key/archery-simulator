@@ -455,3 +455,31 @@ test('発射の動力学: 28" で表示ポンド・曲線の形に一致し、�
   // 引いている間は弦の張力がブレース時より小さい (リカーブの特徴)
   assert.ok(stringTension(m, s28) < stringTension(m, bow.braceIn * INCH));
 });
+
+test('4.3 パラドックス (有限要素): チューニングの経験則どおりに左右の発射方向が変わる', async () => {
+  const { paradoxLaunch } = await import('../src/physics/shot.js');
+  // 指離れの横の弾きを除き、センターショットの幾何学と弦の圧縮・しなりだけで比べる
+  const dir = (mod, releaseVel = 0) => {
+    const s = defaultSetup();
+    s.player.drawLengthIn = 28;
+    mod(s);
+    const p = prepare(s);
+    const r = paradoxLaunch(s, p, p.stroke, { releaseVel });
+    return (r.vCg / p.v0) * 1000;   // mrad (右が正)
+  };
+  // 弱い矢 (スパインの数値が大きい) ほど右、硬い矢ほど左
+  const sp = [400, 600, 800, 1000].map((x) => dir((s) => { s.arrow.spine = x; }));
+  for (let i = 1; i < sp.length; i++) assert.ok(sp[i] > sp[i - 1], `spine ${sp}`);
+  // ポイントが重いほど弱く振る舞う (右)
+  assert.ok(dir((s) => { s.arrow.pointGrain = 140; }) > dir((s) => { s.arrow.pointGrain = 80; }));
+  // 弱い矢はプランジャーの予圧を上げると左へ
+  assert.ok(dir((s) => { s.arrow.spine = 800; s.bow.plungerPreloadN = 4; }) < dir((s) => { s.arrow.spine = 800; s.bow.plungerPreloadN = 0.5; }));
+  // プランジャーを出す (矢先が外へ) と左、引っ込めると右
+  assert.ok(dir((s) => { s.bow.plungerOffsetMm = 2; }) < dir((s) => { s.bow.plungerOffsetMm = 0; }));
+  assert.ok(dir((s) => { s.bow.plungerOffsetMm = -2; }) > dir((s) => { s.bow.plungerOffsetMm = 0; }));
+  // 弦の中心面に矢があり、指の弾きもなければまっすぐ出る
+  close(dir((s) => { s.bow.plungerOffsetMm = -2; }), 0, 1e-9);
+  // 合ったスパインの矢は指離れの乱れに寛容 (弾きの強さによる方向の変化が小さい)
+  const sens = (spine) => Math.abs(dir((s) => { s.arrow.spine = spine; }, -1.5) - dir((s) => { s.arrow.spine = spine; }, -1.0));
+  assert.ok(sens(600) < sens(400) && sens(600) < sens(1000), `sens ${sens(400)} ${sens(600)} ${sens(1000)}`);
+});

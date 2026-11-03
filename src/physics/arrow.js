@@ -101,8 +101,8 @@ export function arrowProperties(a, effLbs, plungerK) {
   };
 }
 
-// 4.3: y_s(t) = A0 e^{−γt} sin(2π f t)
+// 4.3: y_s(t) = A0 e^{−γt} sin(2π f t + φ)。A0 と位相 φ は有限要素の計算 (paradox.js) から
 export function paradoxDeflection(p, t) {
-  return p.A0 * Math.exp(-p.gamma * t) * Math.sin(2 * Math.PI * p.f * t);
+  return p.A0 * Math.exp(-p.gamma * t) * Math.sin(2 * Math.PI * p.f * t + (p.phase ?? 0));
 }
 

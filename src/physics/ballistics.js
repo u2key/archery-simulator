@@ -96,7 +96,7 @@ export function simulateFlight(init, arrow, wind, opts) {
   const dt = opts.dt ?? 0.0005;
   const t0 = opts.t0 ?? 0;          // 風場の時刻 (射撃ごとに進む)
   const recordEvery = opts.recordEvery ?? 0.005;
-  let s = { r: [...init.r], v: [...init.v], d: normalize(init.d ?? init.v), w: [0, 0, 0], p: 0 };
+  let s = { r: [...init.r], v: [...init.v], d: normalize(init.d ?? init.v), w: init.w ? [...init.w] : [0, 0, 0], p: 0 };
   let t = 0;
   const path = [{ t, r: s.r, d: s.d }];
   let nextRec = recordEvery;
