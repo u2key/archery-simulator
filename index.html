@@ -89,7 +89,7 @@
         <div class="h-1.5 rounded bg-slate-700 overflow-hidden">
           <div class="h-full transition-[width] duration-75" :class="ui.clicked ? 'bg-emerald-400' : 'bg-amber-400'" :style="{ width: (ui.phase === 'aiming' ? ui.clicker * 100 : 0) + '%' }"></div>
         </div>
-        <div class="mt-1 text-slate-400">クリッカー {{ ui.clicked ? '切れた — 離す!' : '' }}</div>
+        <div class="mt-1 text-slate-400">クリッカー <span v-if="ui.phase === 'aiming' && ui.clicked" class="text-emerald-300 tabular">切れた — 離す! (あと {{ fmt(ui.clickLeft) }} 秒で引き直し)</span></div>
         <div class="mt-1 text-[11px] text-slate-500 leading-4">
           左ボタン長押しで引く → マウスで狙う → 離して放つ (Space・矢印キーも可)<br>
           <span v-if="ui.pad" class="text-emerald-400">🎮 RT/A で引く・左スティックで狙う・B で避難</span>
@@ -105,6 +105,13 @@
           照準 {{ fmt(last.parts.sway.elev, 2) }} / {{ fmt(last.parts.sway.azim, 2) }},
           ボウ跳ね {{ fmt(last.parts.bowKick.elev, 2) }} / {{ fmt(last.parts.bowKick.azim, 2) }},
           レスト {{ fmt(last.parts.rest.elev, 2) }} / {{ fmt(last.parts.rest.azim, 2) }}</div>
+      </div>
+      <!-- 引き直しなど、射手に知らせるポップアップ (操作は妨げない) -->
+      <div v-if="ui.popup" class="pointer-events-none absolute inset-0 flex items-center justify-center p-4">
+        <div class="max-w-md rounded-lg bg-amber-500 text-slate-950 border-2 border-amber-200 px-6 py-4 text-center shadow-2xl">
+          <div class="text-2xl font-bold mb-1">{{ ui.popup.title }}</div>
+          <div class="text-sm whitespace-pre-line">{{ ui.popup.detail }}</div>
+        </div>
       </div>
       <!-- 雷: 接近 (まだ射てる) / 到来 (避難しないと失格) / 避難中 / 失格 -->
       <div v-if="ui.weather.phase === 'approach' && !sheltered && !eliminated" class="absolute left-1/2 -translate-x-1/2 top-3 rounded bg-amber-600/90 px-4 py-2 text-sm shadow-lg flex items-center gap-3">

@@ -13,6 +13,8 @@ import { connectMatchServer } from './net.js';
 import { WEATHER, WeatherTimeline, phaseAt } from '../physics/weather.js';
 
 const DRAW_TIME = 0.9;
+const CLICKER_HOLD_LIMIT = 1.0;   // クリッカーが切れてから放せる時間 [s]。過ぎたら放さずに引き直す
+const MAX_HOLD = 9;               // クリッカーが切れないまま保持できる時間 [s]
 // サイトの映り込み: ハウジング内径とピン先の実寸 [m]
 const SIGHT_RING_M = 0.011;
 const SIGHT_PIN_M = 0.0012;
@@ -109,7 +111,7 @@ const App = {
     const setup = reactive(defaultSetup());
     const ui = reactive({
       mode: 'third', phase: 'idle', autoEnd: false, slow: 1, exaggerate: 1, tab: 'bow',
-      clicker: 0, clicked: false, wind: { speed: 0, dir: 0 }, message: '', settingsOpen: true, autoCorrect: true,
+      clicker: 0, clicked: false, clickLeft: 0, popup: null, wind: { speed: 0, dir: 0 }, message: '', settingsOpen: true, autoCorrect: true,
       showSight: loadShowSight(),
       // 天候: 表示用。phase は null | 'approach' (遠雷) | 'storm' (雷雲到来・射撃中止)
       weather: { kind: 'clear', look: 'clear', label: '晴れ', icon: '☀', rain: 0, visibility: 1, phase: null, countdown: 0, endIn: 0 },
@@ -277,10 +279,20 @@ const App = {
       }
     }
 
+    // 画面中央のポップアップ。操作は妨げず、数秒で消える (次に引き始めても消える)
+    let popupTimer = null;
+    function showPopup(title, detail) {
+      clearTimeout(popupTimer);
+      ui.popup = { title, detail };
+      popupTimer = setTimeout(() => { ui.popup = null; }, 3500);
+    }
+
     /** 引いている矢を戻す (放さずに引き戻す) */
     function cancelDraw() {
       if (ui.phase === 'drawing' || ui.phase === 'aiming') {
         ui.phase = 'idle';
+        ui.clicked = false;
+        ui.clicker = 0;
         scene?.setDraw(0);
       }
       input?.unlock();
@@ -447,6 +459,7 @@ const App = {
         input?.reset((4 + 4 * Math.random()) * MRAD, (Math.random() * 2 - 1) * 3 * MRAD);
         input?.lock();
       }
+      ui.popup = null;
       ui.phase = 'drawing';
       tPhase = 0;
       ui.clicked = false;
@@ -464,14 +477,10 @@ const App = {
     function release() {
       if (ui.phase !== 'aiming') return;
       input?.unlock();
-      const late = tPhase - tClick;
       let drawDeltaIn = 0, note = 'クリッカーで発射';
       if (!ui.clicked) {
         drawDeltaIn = -(1 - tPhase / tClick) * 3 / 25.4;
         note = 'クリッカー前に離した (引き不足)';
-      } else if (late > 1.0) {
-        drawDeltaIn = -Math.min(0.12, (late - 1.0) * 0.04);
-        note = 'クリッカー後に保持しすぎ (戻り)';
       }
       // 発射方向のずれ = 自分で合わせた照準 + その瞬間の手ブレ
       const result = shoot(toRaw(setup), prep, { rng, wind, time: simTime, bowMotion: true, sway: { ...currentAim }, drawDeltaIn, rain: ui.weather.rain });
@@ -579,7 +588,15 @@ const App = {
           ui.clicked = true;
           clickSound();
         }
-        if ((ui.autoEnd && tPhase >= tClick + 0.12) || tPhase > 9) release();
+        ui.clickLeft = ui.clicked ? Math.max(0, tClick + CLICKER_HOLD_LIMIT - tPhase) : 0;
+        if (ui.autoEnd && tPhase >= tClick + 0.12) release();
+        else if (ui.clicked && tPhase >= tClick + CLICKER_HOLD_LIMIT) {
+          cancelDraw();
+          showPopup('引き直し', 'クリッカーが切れてから 1 秒以内に放せませんでした。\n矢は射っていません (本数に数えません)');
+        } else if (tPhase > MAX_HOLD) {
+          cancelDraw();
+          showPopup('引き直し', 'クリッカーが切れないまま保持が長くなりすぎました。\n矢は射っていません (本数に数えません)');
+        }
       } else if (ui.phase === 'flight') {
         const t = tPhase * ui.slow;
         const r = pendingResult;
